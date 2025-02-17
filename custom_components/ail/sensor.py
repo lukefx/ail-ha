@@ -16,7 +16,7 @@ from custom_components.ail import EnergyDataUpdateCoordinator, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-SCAN_INTERVAL = timedelta(minutes=10)
+SCAN_INTERVAL = timedelta(hours=24)
 
 
 async def async_setup_platform(
