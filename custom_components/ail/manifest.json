@@ -1,0 +1,11 @@
+{
+  "domain": "ail",
+  "name": "AIL: Daily Energy Consumption",
+  "documentation": "https://example.com/daily_energy",
+  "config_flow": false,
+  "dependencies": [],
+  "codeowners": ["@lukefx"],
+  "requirements": ["voluptuous"],
+  "iot_class": "cloud_polling",
+  "version": "0.0.1"
+}
