@@ -1,23 +1,59 @@
 import logging
-from datetime import datetime, timedelta
-from typing import Optional
+from dataclasses import dataclass
+from datetime import timedelta
+from typing import Callable
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorStateClass,
-    SensorEntity,
+    SensorEntity, SensorEntityDescription,
 )
 from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
+from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType, StateType
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from custom_components.ail import EnergyDataUpdateCoordinator, DOMAIN
+from custom_components.ail.coordinator import ConsumptionData
 
 _LOGGER = logging.getLogger(__name__)
 
 SCAN_INTERVAL = timedelta(hours=24)
 
+@dataclass(frozen=True, kw_only=True)
+class EnergyEntityDescription(SensorEntityDescription):
+    value_fn: Callable[[ConsumptionData], str | float]
+
+SENSORS: tuple[EnergyEntityDescription, ...] = (
+    EnergyEntityDescription(
+        key="day",
+        name="Daily consumption",
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        state_class=SensorStateClass.TOTAL,
+        suggested_display_precision=2,
+        value_fn=lambda data: data.day,
+    ),
+    EnergyEntityDescription(
+        key="night",
+        name="Nightly consumption",
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        state_class=SensorStateClass.TOTAL,
+        suggested_display_precision=2,
+        value_fn=lambda data: data.night,
+    ),
+    EnergyEntityDescription(
+        key="total",
+        name="Total consumption",
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        state_class=SensorStateClass.TOTAL,
+        suggested_display_precision=2,
+        value_fn=lambda data: data.total,
+    ),
+)
 
 async def async_setup_platform(
     hass: HomeAssistant,
@@ -30,48 +66,27 @@ async def async_setup_platform(
         return
     coordinator = hass.data[DOMAIN]["coordinator"]
     async_add_entities(
-        EnergySensor(coordinator, ent) for ent in ["day", "night", "total"]
+        EnergySensor(coordinator, sensor) for sensor in SENSORS
     )
 
-
-class EnergySensor(SensorEntity):
-    """Representation of a Sensor."""
-
+class EnergySensor(CoordinatorEntity[EnergyDataUpdateCoordinator], SensorEntity):
     _attr_has_entity_name = True
     _attr_icon = "mdi:chart-timeline-variant"
 
-    def __init__(self, coordinator: EnergyDataUpdateCoordinator, ent: str):
-        """Initialize the sensor."""
+    def __init__(self, coordinator: EnergyDataUpdateCoordinator, sensor: EnergyEntityDescription):
+        super().__init__(coordinator)
         self.coordinator = coordinator
-        self._attr_unique_id = f"{DOMAIN}_energy_{ent}"
-        self._attr_name = f"{ent} energy consumed"
-        self.ent = ent
-
-        # _attr_suggested_display_precision = 0
-        self._attr_state_class = SensorStateClass.TOTAL
-        self._attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
-        self._attr_device_class = SensorDeviceClass.ENERGY
-
-    async def async_update(self):
-        """Update the entity."""
-        await self.coordinator.async_request_refresh()
-        self._attr_extra_state_attributes = {
-            "last_update": self.coordinator.data.to_date
-        }
+        self.sensor = sensor
+        self._attr_unique_id = f"{DOMAIN}_energy_{sensor.key}"
+        self._attr_name = sensor.name
+        self._attr_state_class = self.sensor.state_class
+        self._attr_device_class = self.sensor.device_class
+        self._attr_suggested_display_precision = self.sensor.suggested_display_precision
+        self._attr_native_unit_of_measurement = self.sensor.native_unit_of_measurement
 
     @property
-    def last_reset(self) -> Optional[datetime]:
-        """Return the time when the sensor was last reset."""
-        return self.coordinator.data.to_date
-
-    @property
-    def native_value(self):
+    def native_value(self) -> StateType:
         """Return the state of the sensor."""
         if not self.coordinator.data:
             return None
-        return self.coordinator.data.get(self.ent)
-
-    @property
-    def available(self) -> bool:
-        """Return True if entity is available."""
-        return self.coordinator.last_update_success
+        return self.sensor.value_fn(self.coordinator.data)
