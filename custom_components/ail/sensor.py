@@ -6,7 +6,8 @@ from typing import Callable
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorStateClass,
-    SensorEntity, SensorEntityDescription,
+    SensorEntity,
+    SensorEntityDescription,
 )
 from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant
@@ -21,9 +22,11 @@ _LOGGER = logging.getLogger(__name__)
 
 SCAN_INTERVAL = timedelta(hours=24)
 
+
 @dataclass(frozen=True, kw_only=True)
 class EnergyEntityDescription(SensorEntityDescription):
     value_fn: Callable[[ConsumptionData], str | float]
+
 
 SENSORS: tuple[EnergyEntityDescription, ...] = (
     EnergyEntityDescription(
@@ -55,6 +58,7 @@ SENSORS: tuple[EnergyEntityDescription, ...] = (
     ),
 )
 
+
 async def async_setup_platform(
     hass: HomeAssistant,
     config: ConfigType,
@@ -65,15 +69,16 @@ async def async_setup_platform(
     if discovery_info is None:
         return
     coordinator = hass.data[DOMAIN]["coordinator"]
-    async_add_entities(
-        EnergySensor(coordinator, sensor) for sensor in SENSORS
-    )
+    async_add_entities(EnergySensor(coordinator, sensor) for sensor in SENSORS)
+
 
 class EnergySensor(CoordinatorEntity[EnergyDataUpdateCoordinator], SensorEntity):
     _attr_has_entity_name = True
     _attr_icon = "mdi:chart-timeline-variant"
 
-    def __init__(self, coordinator: EnergyDataUpdateCoordinator, sensor: EnergyEntityDescription):
+    def __init__(
+        self, coordinator: EnergyDataUpdateCoordinator, sensor: EnergyEntityDescription
+    ):
         super().__init__(coordinator)
         self.coordinator = coordinator
         self.sensor = sensor

@@ -63,7 +63,7 @@ class AILEnergyClient:
 
             return False
 
-    async def get_consumption_data(self, day: datetime.date) -> dict:
+    async def get_consumption_data(self, _from: datetime, _to: datetime) -> dict:
         _LOGGER.debug("Calling API...")
 
         if not self.token:
@@ -71,13 +71,13 @@ class AILEnergyClient:
 
         payload = {
             "meterID": self.meter_id,
-            "scale": "days",
+            "scale": "hours",
             "timeFrame": {
-                "from": day.strftime("%Y-%m-%d 00:00:00"),
-                "to": day.strftime("%Y-%m-%d 23:59:59"),
+                "from": _from.strftime("%Y-%m-%d %H:%M:%S"),
+                "to": _to.strftime("%Y-%m-%d %H:%M:%S"),
             },
-            "forceWholeTimeFrame": False,
-            "hoursPrecision": False,
+            "forceWholeTimeFrame": True,
+            "hoursPrecision": True,
             "fetchPreviousYearData": False,
         }
 

@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
@@ -29,28 +29,29 @@ class ConsumptionData:
     total: float
     from_date: datetime
     to_date: datetime
-    is_pending: bool
-    readings_count: int
 
     def get(self, property_name: str) -> any:
         """Get property value by name."""
         return getattr(self, property_name)
 
     @classmethod
-    def from_api_response(cls, data: dict) -> "ConsumptionData":
+    def from_api_response(cls, data: dict) -> list["ConsumptionData"]:
         """Create instance from API response."""
-        if not data.get("response") or len(data["response"]) != 1:
+        if not data.get("response") or len(data["response"]) < 1:
             raise ValueError("API response must contain exactly one consumption record")
-        response = data["response"][0]
-        return cls(
-            day=response["day"],
-            night=response["night"],
-            from_date=datetime.fromisoformat(response["from"]),
-            to_date=datetime.fromisoformat(response["to"]),
-            is_pending=response["isPending"],
-            readings_count=response["readingsCount"],
-            total=round(response["day"] + response["night"], 2),
-        )
+        response = data["response"]
+        statistics = []
+        for item in response:
+            statistics.append(
+                cls(
+                    day=item.get("day", 0),
+                    night=item.get("night", 0),
+                    from_date=datetime.fromisoformat(item["from"]),
+                    to_date=datetime.fromisoformat(item["to"]),
+                    total=item.get("day", 0) + item.get("night", 0),
+                )
+            )
+        return statistics
 
 
 class EnergyDataUpdateCoordinator(DataUpdateCoordinator[ConsumptionData]):
@@ -62,7 +63,7 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[ConsumptionData]):
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=timedelta(hours=24),
+            update_interval=timedelta(hours=12),
         )
         self.api_client = client
         self.hass = hass
@@ -80,89 +81,189 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[ConsumptionData]):
             raise ConfigEntryAuthFailed
 
         try:
-            yesterday = date.today() - timedelta(days=1)
-            raw_data = await self.api_client.get_consumption_data(yesterday)
-            consumption = ConsumptionData.from_api_response(raw_data)
-            _LOGGER.debug("Updated consumption data: %s", consumption)
+            _from = datetime.now() - timedelta(days=2)
+            _to = datetime.now() - timedelta(days=1)
+            raw_data = await self.api_client.get_consumption_data(_from, _to)
+            consumption_stats = ConsumptionData.from_api_response(raw_data)
+            _LOGGER.debug("Updated consumption data: %s", consumption_stats)
 
             # Update statistics after getting new data
-            await self._insert_statistics(consumption)
-
-            return consumption
+            await self._insert_statistics(consumption_stats)
+            return consumption_stats
         except Exception as err:
             _LOGGER.error("Error fetching consumption data: %s", err)
             raise UpdateFailed(f"Error updating data: {err}") from err
 
-    async def _insert_statistics(self, consumption: ConsumptionData) -> None:
-        """Insert energy consumption statistics."""
-        # Define statistic IDs for different metrics
-        day_statistic_id = f"{DOMAIN}:day_consumption"
-        night_statistic_id = f"{DOMAIN}:night_consumption"
-        total_statistic_id = f"{DOMAIN}:total_consumption"
+    def sum_hourly_consumptions(
+        self, consumptions: list[ConsumptionData]
+    ) -> list[ConsumptionData]:
+        """Sum consumption data by hour.
 
-        # Get the last statistics to determine the starting point
-        last_stats = await get_instance(self.hass).async_add_executor_job(
-            get_last_statistics,
-            self.hass,
-            1,
+        Args:
+            consumptions: List of consumption data records
+
+        Returns:
+            List of ConsumptionData objects with hourly sums
+        """
+        hourly_sums = []
+        current_hour = None
+        current_day_sum = 0.0
+        current_night_sum = 0.0
+        current_total_sum = 0.0
+
+        for consumption in consumptions:
+            consumption_hour = consumption.from_date.replace(
+                minute=0, second=0, microsecond=0
+            )
+
+            if current_hour != consumption_hour:
+                # Save the previous hour's sums if they exist
+                if current_hour is not None:
+                    hourly_sums.append(
+                        ConsumptionData(
+                            day=round(current_day_sum, 2),
+                            night=round(current_night_sum, 2),
+                            total=round(current_total_sum, 2),
+                            from_date=current_hour,
+                            to_date=current_hour + timedelta(hours=1),
+                        )
+                    )
+                # Reset for the new hour
+                current_hour = consumption_hour
+                current_day_sum = 0.0
+                current_night_sum = 0.0
+                current_total_sum = 0.0
+
+            # Add consumption values for the current hour
+            current_day_sum += consumption.day
+            current_night_sum += consumption.night
+            current_total_sum += consumption.total
+
+        # Add the last hour's sums if they exist
+        if current_hour is not None:
+            hourly_sums.append(
+                ConsumptionData(
+                    day=round(current_day_sum, 2),
+                    night=round(current_night_sum, 2),
+                    total=round(current_total_sum, 2),
+                    from_date=current_hour,
+                    to_date=current_hour + timedelta(hours=1),
+                )
+            )
+
+        return hourly_sums
+
+    async def _insert_statistics(self, consumptions: list[ConsumptionData]) -> None:
+        """Insert energy consumption statistics.
+
+        Args:
+            consumptions: List of consumption data records to process
+        """
+        if not consumptions:
+            _LOGGER.debug("No consumption data to process")
+            return
+
+        # Define base statistic IDs
+        day_statistic_id = f"{DOMAIN}:energy_day_consumption"
+        night_statistic_id = f"{DOMAIN}:energy_night_consumption"
+        total_statistic_id = f"{DOMAIN}:energy_total_consumption"
+
+        _LOGGER.debug(
+            "Updating Statistics for day: %s, night: %s, total: %s",
+            day_statistic_id,
+            night_statistic_id,
             total_statistic_id,
-            True,
-            set(),
         )
 
-        if not last_stats:
-            _LOGGER.debug("Initializing statistics for the first time")
+        # Get last statistics to determine our starting point
+        last_stat = await get_instance(self.hass).async_add_executor_job(
+            get_last_statistics, self.hass, 1, total_statistic_id, True, set()
+        )
+
+        if not last_stat:
+            _LOGGER.debug("Updating statistics for the first time")
             day_sum = night_sum = total_sum = 0.0
+            last_stats_time = None
         else:
-            # Get existing sums from the last statistics
-            stats = await get_instance(self.hass).async_add_executor_job(
-                statistics_during_period,
-                self.hass,
-                consumption.from_date,
-                None,
-                {day_statistic_id, night_statistic_id, total_statistic_id},
-                "hour",
-                None,
-                {"sum"},
-            )
+            # Get the earliest consumption date to use as our start time
+            start = min(c.from_date for c in consumptions)
+            _LOGGER.debug("Getting statistics at: %s", start)
+
+            # Try to find existing statistics at the start time
+            # If none found at exact time, try to find the oldest after start
+            for end in (start + timedelta(seconds=1), None):
+                stats = await get_instance(self.hass).async_add_executor_job(
+                    statistics_during_period,
+                    self.hass,
+                    start,
+                    end,
+                    {day_statistic_id, night_statistic_id, total_statistic_id},
+                    "hour",
+                    None,
+                    {"sum"},
+                )
+                if stats:
+                    break
+                if end:
+                    _LOGGER.debug(
+                        "Not found. Trying to find the oldest statistic after %s",
+                        start,
+                    )
+
+            # Initialize sums from existing statistics if found
             if not stats:
                 day_sum = night_sum = total_sum = 0.0
+                last_stats_time = None
             else:
-                day_sum = stats[day_statistic_id][0]["sum"] if day_statistic_id in stats else 0.0
-                night_sum = stats[night_statistic_id][0]["sum"] if night_statistic_id in stats else 0.0
-                total_sum = stats[total_statistic_id][0]["sum"] if total_statistic_id in stats else 0.0
+                day_sum = float(stats[day_statistic_id][0]["sum"])
+                night_sum = float(stats[night_statistic_id][0]["sum"])
+                total_sum = float(stats[total_statistic_id][0]["sum"])
+                last_stats_time = stats[total_statistic_id][0]["start"]
 
-        # Update sums with new consumption data
-        day_sum += consumption.day
-        night_sum += consumption.night
-        total_sum += consumption.total
+        # Initialize statistics lists
+        day_statistics = []
+        night_statistics = []
+        total_statistics = []
 
-        # Create statistics data
-        start_time = consumption.from_date
+        # Sort consumptions by date to ensure proper sum calculation
+        consumptions = self.sum_hourly_consumptions(consumptions)
+        sorted_consumptions = sorted(consumptions, key=lambda x: x.from_date)
 
-        day_statistics = [
-            StatisticData(
-                start=start_time,
-                state=consumption.day,
-                sum=day_sum,
+        # Process each consumption record
+        for consumption in sorted_consumptions:
+            start = consumption.from_date
+
+            # Skip if this consumption period has already been recorded
+            if last_stats_time is not None and start.timestamp() <= last_stats_time:
+                continue
+
+            # Update running sums
+            day_sum += consumption.day
+            night_sum += consumption.night
+            total_sum += consumption.total
+
+            # Create statistics records
+            day_statistics.append(
+                StatisticData(
+                    start=start,
+                    state=consumption.day,
+                    sum=day_sum,
+                )
             )
-        ]
-
-        night_statistics = [
-            StatisticData(
-                start=start_time,
-                state=consumption.night,
-                sum=night_sum,
+            night_statistics.append(
+                StatisticData(
+                    start=start,
+                    state=consumption.night,
+                    sum=night_sum,
+                )
             )
-        ]
-
-        total_statistics = [
-            StatisticData(
-                start=start_time,
-                state=consumption.total,
-                sum=total_sum,
+            total_statistics.append(
+                StatisticData(
+                    start=start,
+                    state=consumption.total,
+                    sum=total_sum,
+                )
             )
-        ]
 
         # Create metadata for each metric
         base_metadata = {
@@ -190,12 +291,24 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[ConsumptionData]):
             **base_metadata,
         )
 
-        # Add statistics to the database
-        _LOGGER.debug("Adding statistics for day consumption")
-        async_add_external_statistics(self.hass, day_metadata, day_statistics)
+        # Add statistics to the database if we have new data
+        if day_statistics:
+            _LOGGER.debug(
+                "Adding %s statistics for day consumption",
+                len(day_statistics),
+            )
+            async_add_external_statistics(self.hass, day_metadata, day_statistics)
 
-        _LOGGER.debug("Adding statistics for night consumption")
-        async_add_external_statistics(self.hass, night_metadata, night_statistics)
+            _LOGGER.debug(
+                "Adding %s statistics for night consumption",
+                len(night_statistics),
+            )
+            async_add_external_statistics(self.hass, night_metadata, night_statistics)
 
-        _LOGGER.debug("Adding statistics for total consumption")
-        async_add_external_statistics(self.hass, total_metadata, total_statistics)
+            _LOGGER.debug(
+                "Adding %s statistics for total consumption",
+                len(total_statistics),
+            )
+            async_add_external_statistics(self.hass, total_metadata, total_statistics)
+        else:
+            _LOGGER.debug("No new statistics to add")
