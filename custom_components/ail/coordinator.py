@@ -42,15 +42,16 @@ class ConsumptionData:
         response = data["response"]
         statistics = []
         for item in response:
-            statistics.append(
-                cls(
-                    day=item.get("day", 0),
-                    night=item.get("night", 0),
-                    from_date=datetime.fromisoformat(item["from"]),
-                    to_date=datetime.fromisoformat(item["to"]),
-                    total=item.get("day", 0) + item.get("night", 0),
+            if item.get("readingsCount") is not None:
+                statistics.append(
+                    cls(
+                        day=item.get("day", 0),
+                        night=item.get("night", 0),
+                        from_date=datetime.fromisoformat(item["from"]),
+                        to_date=datetime.fromisoformat(item["to"]),
+                        total=item.get("day", 0) + item.get("night", 0),
+                    )
                 )
-            )
         return statistics
 
 
@@ -121,9 +122,9 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[ConsumptionData]):
                 if current_hour is not None:
                     hourly_sums.append(
                         ConsumptionData(
-                            day=round(current_day_sum, 2),
-                            night=round(current_night_sum, 2),
-                            total=round(current_total_sum, 2),
+                            day=current_day_sum,
+                            night=current_night_sum,
+                            total=current_total_sum,
                             from_date=current_hour,
                             to_date=current_hour + timedelta(hours=1),
                         )
