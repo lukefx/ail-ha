@@ -1,10 +1,34 @@
 import logging
 import re
 from datetime import datetime
+from typing import Optional, List
 
 import aiohttp
+from pydantic import BaseModel, Field
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class ConsumptionRecord(BaseModel):
+    """Model for a single consumption record."""
+
+    day: Optional[float] = 0.0
+    from_: datetime = Field(..., alias="from")
+    to: datetime
+    is_pending: bool = Field(..., alias="isPending")
+    readings_count: Optional[int] = Field(None, alias="readingsCount")
+    night: Optional[float] = 0.0
+
+
+class ConsumptionResponse(BaseModel):
+    """Model for the complete API response."""
+
+    response: List[ConsumptionRecord]
+
+    class Config:
+        populate_by_name = True
+        exclude_none = True
+        json_encoders = {datetime: lambda v: v.isoformat()}
 
 
 class AILEnergyClient:
@@ -63,8 +87,10 @@ class AILEnergyClient:
 
             return False
 
-    async def get_consumption_data(self, _from: datetime, _to: datetime) -> dict:
-        _LOGGER.debug("Calling API...")
+    async def get_consumption_data(
+        self, _from: datetime, _to: datetime
+    ) -> ConsumptionResponse:
+        _LOGGER.debug(f"Calling API for timedelta {_from} -> {_to}...")
 
         if not self.token:
             raise ValueError("Not logged in. Call login() first")
@@ -76,7 +102,7 @@ class AILEnergyClient:
                 "from": _from.strftime("%Y-%m-%d %H:%M:%S"),
                 "to": _to.strftime("%Y-%m-%d %H:%M:%S"),
             },
-            "forceWholeTimeFrame": True,
+            "forceWholeTimeFrame": False,
             "hoursPrecision": True,
             "fetchPreviousYearData": False,
         }
@@ -88,7 +114,8 @@ class AILEnergyClient:
             json=payload,
         ) as response:
             if response.status == 200:
-                return await response.json()
+                raw_json = await response.json()
+                return ConsumptionResponse(**raw_json)
             else:
                 raise ConnectionError(
                     f"Request failed with status code: {response.status}"

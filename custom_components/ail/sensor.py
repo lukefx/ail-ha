@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime
 from typing import Callable
 
 from homeassistant.components.sensor import (
@@ -20,8 +20,6 @@ from custom_components.ail.coordinator import ConsumptionData
 
 _LOGGER = logging.getLogger(__name__)
 
-SCAN_INTERVAL = timedelta(hours=24)
-
 
 @dataclass(frozen=True, kw_only=True)
 class EnergyEntityDescription(SensorEntityDescription):
@@ -31,7 +29,7 @@ class EnergyEntityDescription(SensorEntityDescription):
 SENSORS: tuple[EnergyEntityDescription, ...] = (
     EnergyEntityDescription(
         key="day",
-        name="Daily consumption",
+        name="Day: Last hour consumption",
         device_class=SensorDeviceClass.ENERGY,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         state_class=SensorStateClass.TOTAL,
@@ -40,7 +38,7 @@ SENSORS: tuple[EnergyEntityDescription, ...] = (
     ),
     EnergyEntityDescription(
         key="night",
-        name="Nightly consumption",
+        name="Night: last hour consumption",
         device_class=SensorDeviceClass.ENERGY,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         state_class=SensorStateClass.TOTAL,
@@ -48,11 +46,11 @@ SENSORS: tuple[EnergyEntityDescription, ...] = (
         value_fn=lambda data: data.night,
     ),
     EnergyEntityDescription(
-        key="total",
-        name="Total consumption",
+        key="current",
+        name="Last hour consumption",
         device_class=SensorDeviceClass.ENERGY,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        state_class=SensorStateClass.TOTAL,
+        state_class=SensorStateClass.TOTAL_INCREASING,
         suggested_display_precision=2,
         value_fn=lambda data: data.total,
     ),
@@ -92,6 +90,17 @@ class EnergySensor(CoordinatorEntity[EnergyDataUpdateCoordinator], SensorEntity)
     @property
     def native_value(self) -> StateType:
         """Return the state of the sensor."""
+        _LOGGER.debug(f"Update sensor {self._attr_unique_id}")
         if not self.coordinator.data:
             return None
         return self.sensor.value_fn(self.coordinator.data)
+
+    @property
+    def last_reset(self) -> datetime | None:
+        """Return the time when the sensor was last reset, if any."""
+        if (
+            not self.coordinator.data
+            or self._attr_device_class is not SensorStateClass.TOTAL_INCREASING
+        ):
+            return None
+        return self.coordinator.data.from_date

@@ -7,7 +7,6 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
-from homeassistant.setup import async_setup_component
 
 from custom_components.ail.api_client import AILEnergyClient
 from custom_components.ail.const import DOMAIN
