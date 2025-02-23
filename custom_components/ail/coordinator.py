@@ -14,7 +14,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api_client import AILEnergyClient, ConsumptionResponse
-from .const import DOMAIN
+from .const import DOMAIN, DAY_CONSUMPTION_KEY, NIGHT_CONSUMPTION_KEY, TOTAL_CONSUMPTION_KEY
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -134,10 +134,6 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[ConsumptionData]):
         if not consumptions:
             _LOGGER.debug("No consumption data to process")
             return
-
-        DAY_CONSUMPTION_KEY = f"{DOMAIN}:energy_day_consumption"
-        NIGHT_CONSUMPTION_KEY = f"{DOMAIN}:energy_night_consumption"
-        TOTAL_CONSUMPTION_KEY = f"{DOMAIN}:energy_total_consumption"
 
         # Define statistic IDs and their corresponding properties
         stat_configs = {
