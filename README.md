@@ -1,11 +1,9 @@
-# AIL Energy Consumption for Home Assistant
+# AIL: Aziende Industriali di Lugano - Home Assistant Integration
 
 ## Installation
 
-## Configuration
+TODO: Add installation instructions on how to install it with HACS
 
-```yaml
-ail:
-  username: your@email.com
-  password: password
-```
+## Configuration
+ 
+Follow the instructions on screen to configure the integration.

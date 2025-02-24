@@ -9,10 +9,11 @@ from homeassistant.components.sensor import (
     SensorEntity,
     SensorEntityDescription,
 )
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType, StateType
+from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from custom_components.ail import EnergyDataUpdateCoordinator, DOMAIN
@@ -57,16 +58,12 @@ SENSORS: tuple[EnergyEntityDescription, ...] = (
 )
 
 
-async def async_setup_platform(
+async def async_setup_entry(
     hass: HomeAssistant,
-    config: ConfigType,
+    entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
-    discovery_info: DiscoveryInfoType | None = None,
 ) -> None:
-    """Set up the AIL sensor platform."""
-    if discovery_info is None:
-        return
-    coordinator = hass.data[DOMAIN]["coordinator"]
+    coordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(EnergySensor(coordinator, sensor) for sensor in SENSORS)
 
 

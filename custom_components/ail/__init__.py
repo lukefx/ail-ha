@@ -26,36 +26,26 @@ class RuntimeData:
 PLATFORMS = [Platform.SENSOR]
 
 
-async def async_setup(hass: HomeAssistant, config: AilConfigEntry) -> bool:
-    """Set up the My Integration component."""
-    if DOMAIN not in config:
-        return True
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up from a config entry."""
+    # Create coordinator
+    client = AILEnergyClient(entry.data["username"], entry.data["password"])
+    data_coordinator = EnergyDataUpdateCoordinator(hass, entry, client)
 
-    username = config[DOMAIN].get("username")
-    password = config[DOMAIN].get("password")
+    # Get initial data
+    await data_coordinator.async_config_entry_first_refresh()
 
-    client = AILEnergyClient(username, password)
-    data_coordinator = EnergyDataUpdateCoordinator(hass, client)
+    # Store coordinator
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][entry.entry_id] = data_coordinator
 
-    await data_coordinator.async_refresh()
-    # await data_coordinator.async_config_entry_first_refresh()
-
-    hass.data[DOMAIN] = {
-        "coordinator": data_coordinator,
-    }
-
-    for platform in PLATFORMS:
-        hass.async_create_task(
-            hass.helpers.discovery.async_load_platform(platform, DOMAIN, {}, config)
-        )
-
-    # Set up sensor platform
-    # await async_setup_component(hass, "sensor", {"sensor": [{"platform": DOMAIN}]})
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
     return unload_ok

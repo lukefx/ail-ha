@@ -1,6 +1,7 @@
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from homeassistant.config_entries import ConfigEntry
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
@@ -14,7 +15,12 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api_client import AILEnergyClient, ConsumptionResponse
-from .const import DOMAIN, DAY_CONSUMPTION_KEY, NIGHT_CONSUMPTION_KEY, TOTAL_CONSUMPTION_KEY
+from .const import (
+    DOMAIN,
+    DAY_CONSUMPTION_KEY,
+    NIGHT_CONSUMPTION_KEY,
+    TOTAL_CONSUMPTION_KEY,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -54,7 +60,9 @@ class ConsumptionData:
 class EnergyDataUpdateCoordinator(DataUpdateCoordinator[ConsumptionData]):
     """Class to manage fetching data from the API and updating statistics."""
 
-    def __init__(self, hass: HomeAssistant, client: AILEnergyClient) -> None:
+    def __init__(
+        self, hass: HomeAssistant, entry: ConfigEntry, client: AILEnergyClient
+    ) -> None:
         """Initialize the coordinator."""
         super().__init__(
             hass,
