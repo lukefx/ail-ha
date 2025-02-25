@@ -51,7 +51,7 @@ SENSORS: tuple[EnergyEntityDescription, ...] = (
         name="Last hour consumption",
         device_class=SensorDeviceClass.ENERGY,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        state_class=SensorStateClass.TOTAL_INCREASING,
+        state_class=SensorStateClass.TOTAL,
         suggested_display_precision=2,
         value_fn=lambda data: data.total,
     ),
@@ -95,9 +95,6 @@ class EnergySensor(CoordinatorEntity[EnergyDataUpdateCoordinator], SensorEntity)
     @property
     def last_reset(self) -> datetime | None:
         """Return the time when the sensor was last reset, if any."""
-        if (
-            not self.coordinator.data
-            or self._attr_device_class is not SensorStateClass.TOTAL_INCREASING
-        ):
+        if not self.coordinator.data:
             return None
         return self.coordinator.data.from_date

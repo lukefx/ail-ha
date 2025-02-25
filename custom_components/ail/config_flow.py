@@ -11,6 +11,7 @@ from homeassistant.helpers import selector
 from . import AILEnergyClient
 from .const import DOMAIN, CONF_USERNAME, CONF_PASSWORD
 
+
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for My Integration."""
 
@@ -23,18 +24,20 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors = {}
 
         # Define schema with descriptions
-        schema = vol.Schema({
-            vol.Required(CONF_USERNAME): selector.TextSelector(
-                selector.TextSelectorConfig(
-                    type=selector.TextSelectorType.TEXT,
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_USERNAME): selector.TextSelector(
+                    selector.TextSelectorConfig(
+                        type=selector.TextSelectorType.TEXT,
+                    ),
                 ),
-            ),
-            vol.Required(CONF_PASSWORD): selector.TextSelector(
-                selector.TextSelectorConfig(
-                    type=selector.TextSelectorType.PASSWORD,
+                vol.Required(CONF_PASSWORD): selector.TextSelector(
+                    selector.TextSelectorConfig(
+                        type=selector.TextSelectorType.PASSWORD,
+                    ),
                 ),
-            ),
-        })
+            }
+        )
 
         if user_input is not None:
             try:
@@ -65,9 +68,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def _test_credentials(self, user_input):
         """Test if we can authenticate with the credentials."""
         client = AILEnergyClient(user_input[CONF_USERNAME], user_input[CONF_PASSWORD])
-        with client:
-            if not await client.login():
-                raise InvalidAuth()
+        if not await client.login():
+            raise InvalidAuth()
 
 
 class CannotConnect(HomeAssistantError):
