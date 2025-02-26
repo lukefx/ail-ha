@@ -72,14 +72,7 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[ConsumptionData]):
             update_interval=timedelta(hours=1),
         )
         self.api_client = client
-        self.hass = hass
 
-        @callback
-        def _dummy_listener() -> None:
-            pass
-
-        # Force periodic updates by registering at least one listener
-        self.async_add_listener(_dummy_listener)
 
     async def _async_update_data(self) -> ConsumptionData:
         """Update data via API and update statistics."""
