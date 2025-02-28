@@ -37,24 +37,6 @@ SENSORS: tuple[EnergyEntityDescription, ...] = (
         suggested_display_precision=2,
         value_fn=lambda data: data.day,
     ),
-    EnergyEntityDescription(
-        key="night",
-        name="Night: last hour consumption",
-        device_class=SensorDeviceClass.ENERGY,
-        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        state_class=SensorStateClass.TOTAL,
-        suggested_display_precision=2,
-        value_fn=lambda data: data.night,
-    ),
-    EnergyEntityDescription(
-        key="current",
-        name="Last hour consumption",
-        device_class=SensorDeviceClass.ENERGY,
-        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        state_class=SensorStateClass.TOTAL,
-        suggested_display_precision=2,
-        value_fn=lambda data: data.total,
-    ),
 )
 
 
