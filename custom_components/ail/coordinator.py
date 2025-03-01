@@ -72,14 +72,7 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[ConsumptionData]):
             update_interval=timedelta(hours=1),
         )
         self.api_client = client
-        self.hass = hass
 
-        @callback
-        def _dummy_listener() -> None:
-            pass
-
-        # Force periodic updates by registering at least one listener
-        self.async_add_listener(_dummy_listener)
 
     async def _async_update_data(self) -> ConsumptionData:
         """Update data via API and update statistics."""
@@ -91,10 +84,21 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[ConsumptionData]):
             _to = datetime.now() - timedelta(days=1)
             response = await self.api_client.get_consumption_data(_from, _to)
             consumption_stats = ConsumptionData.from_api_response(response)
-            _LOGGER.debug("Updated consumption data: %s", consumption_stats)
 
-            # Update statistics after getting new data
+            # Handle empty consumption_stats array
+            if not consumption_stats:
+                _LOGGER.warning("No consumption data received from API")
+                return ConsumptionData(
+                    day=0.0,
+                    night=0.0,
+                    total=0.0,
+                    from_date=_from,
+                    to_date=_to
+                )
+
             await self._insert_statistics(consumption_stats)
+            _LOGGER.debug("Updated consumption data: %s", consumption_stats)
+                            
             return consumption_stats[-1]
         except Exception as err:
             _LOGGER.error("Error fetching consumption data: %s", err)
