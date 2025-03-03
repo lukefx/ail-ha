@@ -83,9 +83,22 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[ConsumptionData]):
 
             # Process hourly consumptions
             hourly_data = self._sum_hourly_consumptions(consumption_data)
+            consumption_stats = ConsumptionData.from_api_response(response)
 
-            # Update statistics after getting new data
+            # Handle empty consumption_stats array
+            if not consumption_stats:
+                _LOGGER.warning("No consumption data received from API")
+                return ConsumptionData(
+                    day=0.0,
+                    night=0.0,
+                    total=0.0,
+                    from_date=_from,
+                    to_date=_to
+                )
+
             await self._insert_statistics(hourly_data)
+            _LOGGER.debug("Updated consumption data: %s", consumption_stats)
+
             return consumption_data[-1]
         except Exception as err:
             _LOGGER.error("Error fetching consumption data: %s", err)
