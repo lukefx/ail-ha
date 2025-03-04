@@ -107,18 +107,23 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[ConsumptionData]):
     def _sum_hourly_consumptions(
         self, consumptions: list[ConsumptionData]
     ) -> dict[datetime, ConsumptionData]:
+        intervals_per_hour = {}
         hourly_sums = {}
 
-        # Find the first entry that starts at the beginning of an hour
-        start_idx = 0
-        for idx, consumption in enumerate(consumptions):
-            if consumption.from_date.minute == 0:
-                start_idx = idx
-                break
-
-        # Process only from the first full hour
-        for consumption in consumptions[start_idx:]:
+        # Count how many readings we have for each hour
+        for consumption in consumptions:
             hour_key = consumption.from_date.replace(minute=0, second=0, microsecond=0)
+            if hour_key not in intervals_per_hour:
+                intervals_per_hour[hour_key] = 0
+            intervals_per_hour[hour_key] += 1
+        
+        # Sum up the readings for each hour
+        for consumption in consumptions:
+            hour_key = consumption.from_date.replace(minute=0, second=0, microsecond=0)
+
+            if intervals_per_hour.get(hour_key, 0) != 4:
+                continue
+                
             if hour_key not in hourly_sums:
                 hourly_sums[hour_key] = ConsumptionData(
                     day=0.0,
