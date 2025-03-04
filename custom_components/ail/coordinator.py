@@ -69,6 +69,41 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[ConsumptionData]):
         )
         self.api_client = client
 
+    async def _async_setup(self) -> None:
+        print(f"Setup AIL Energy coordinator")
+
+        last_stats = await get_instance(self.hass).async_add_executor_job(
+            get_last_statistics, self.hass, 1, ENERGY_CONSUMPTION_KEY, True, set()
+        )
+
+        if not last_stats:
+            print("No statistics found")
+            # Fetch historical data for the last 2 months in 4-day chunks
+            end_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            start_date = end_date - timedelta(days=60)  # last 2 months
+
+            chunk_size = timedelta(days=4)
+            chunk_start = start_date
+
+            if not await self.api_client.login():
+                raise ConfigEntryAuthFailed
+
+            all_consumption_data = {}
+            while chunk_start < end_date:
+                chunk_end = min(chunk_start + chunk_size, end_date)
+                _LOGGER.debug("Fetching data from %s to %s", chunk_start, chunk_end)
+                response = await self.api_client.get_consumption_data(
+                    chunk_start, chunk_end
+                )
+                consumption_data = ConsumptionData.from_api_response(response)
+                hourly_data = self._sum_hourly_consumptions(consumption_data)
+                _LOGGER.debug("Updated consumption data: %s", hourly_data)
+                all_consumption_data.update(hourly_data)
+                chunk_start = chunk_end
+
+            if all_consumption_data:
+                await self._insert_statistics(all_consumption_data)
+
     async def _async_update_data(self) -> ConsumptionData:
         """Update data via API and update statistics."""
         if not await self.api_client.login():
@@ -83,21 +118,14 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[ConsumptionData]):
 
             # Process hourly consumptions
             hourly_data = self._sum_hourly_consumptions(consumption_data)
-            consumption_stats = ConsumptionData.from_api_response(response)
 
             # Handle empty consumption_stats array
-            if not consumption_stats:
+            if not hourly_data:
                 _LOGGER.warning("No consumption data received from API")
-                return ConsumptionData(
-                    day=0.0,
-                    night=0.0,
-                    total=0.0,
-                    from_date=_from,
-                    to_date=_to
-                )
+                return ConsumptionData(day=0.0, night=0.0, from_date=_from, to_date=_to)
 
             await self._insert_statistics(hourly_data)
-            _LOGGER.debug("Updated consumption data: %s", consumption_stats)
+            _LOGGER.debug("Updated consumption data: %s", hourly_data)
 
             return consumption_data[-1]
         except Exception as err:
