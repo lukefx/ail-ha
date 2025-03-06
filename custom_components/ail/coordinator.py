@@ -31,6 +31,7 @@ class ConsumptionData:
     night: float
     from_date: datetime
     to_date: datetime
+    tickers: int = 0
 
     def get(self, property_name: str) -> any:
         """Get property value by name."""
@@ -80,7 +81,7 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[ConsumptionData]):
             print("No statistics found")
             # Fetch historical data for the last 2 months in 4-day chunks
             end_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            start_date = end_date - timedelta(days=60)  # last 2 months
+            start_date = end_date - timedelta(days=90)  # last 3 months
 
             chunk_size = timedelta(days=4)
             chunk_start = start_date
@@ -132,8 +133,9 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[ConsumptionData]):
             _LOGGER.error("Error fetching consumption data: %s", err)
             raise UpdateFailed(f"Error updating data: {err}") from err
 
+    @staticmethod
     def _sum_hourly_consumptions(
-        self, consumptions: list[ConsumptionData]
+        consumptions: list[ConsumptionData],
     ) -> dict[datetime, ConsumptionData]:
         hourly_sums = {}
 
@@ -157,7 +159,10 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[ConsumptionData]):
 
             current = hourly_sums[hour_key]
             current.day += consumption.day
+            current.tickers += 1
 
+        # filter all hours that have less than 4 tickers
+        hourly_sums = {k: v for k, v in hourly_sums.items() if v.tickers >= 4}
         return hourly_sums
 
     async def _insert_statistics(
