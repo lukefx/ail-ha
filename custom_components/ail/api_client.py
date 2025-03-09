@@ -87,6 +87,9 @@ class AILEnergyClient:
 
             return False
 
+    def meter_id(self) -> Optional[str]:
+        return self.meter_id
+
     async def get_consumption_data(
         self, _from: datetime, _to: datetime
     ) -> ConsumptionResponse:
