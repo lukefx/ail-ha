@@ -218,6 +218,9 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
                 )
 
             current = hourly_sums[hour_key]
+
+            # between 00:00 and 07:00 is considered night (off-peak hours)
+            # between 07:00 and 00:00 is considered day (peak hours)
             if 0 <= current.from_date.hour < 7 and 0 <= current.to_date.hour <= 7:
                 current.night += consumption.day
             else:
