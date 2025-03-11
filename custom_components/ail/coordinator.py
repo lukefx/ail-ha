@@ -13,7 +13,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .api_client import AILEnergyClient, ConsumptionResponse
 from .const import (
@@ -22,6 +22,10 @@ from .const import (
     ENERGY_DAY_CONSUMPTION_KEY,
     ENERGY_CONSUMPTION_KEY,
     DEFAULT_UPDATE_INTERVAL_HOUR,
+    DAILY_PRICE_CHF,
+    NIGHTLY_PRICE_CHF,
+    ENERGY_CONSUMPTION_COST_DAY_KEY,
+    ENERGY_CONSUMPTION_COST_NIGHT_KEY, CONF_FIXED_TARIFF,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -31,10 +35,12 @@ _LOGGER = logging.getLogger(__name__)
 class ConsumptionData:
     """Class for holding consumption data."""
 
-    day: float
-    night: float
     from_date: datetime
     to_date: datetime
+    day: float = 0.0
+    night: float = 0.0
+    day_cost: float = 0.0
+    night_cost: float = 0.0
     tickers: int = 0
 
     def get(self, property_name: str) -> Any:
@@ -190,8 +196,8 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
         else:
             _LOGGER.warning("No historical consumption data was retrieved")
 
-    @staticmethod
     def _sum_hourly_consumptions(
+            self,
         consumptions: List[ConsumptionData],
     ) -> Dict[datetime, ConsumptionData]:
         """Sum consumption records into hourly buckets.
@@ -210,21 +216,22 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
             hour_key = consumption.from_date.replace(minute=0, second=0, microsecond=0)
             if hour_key not in hourly_sums:
                 hourly_sums[hour_key] = ConsumptionData(
-                    day=0.0,
-                    night=0.0,
                     from_date=hour_key,
                     to_date=hour_key + timedelta(hours=1),
-                    tickers=0,
                 )
 
             current = hourly_sums[hour_key]
 
-            # between 00:00 and 07:00 is considered night (off-peak hours)
-            # between 07:00 and 00:00 is considered day (peak hours)
-            if 0 <= current.from_date.hour < 7 and 0 <= current.to_date.hour <= 7:
-                current.night += consumption.day
-            else:
+            if self.entry.options.get(CONF_FIXED_TARIFF):
                 current.day += consumption.day
+            else:
+                # between 00:00 and 06:00 is considered night (off-peak hours)
+                # between 06:00 and 00:00 is considered day (peak hours)
+                if 0 <= current.from_date.hour < 6 and 0 <= current.to_date.hour <= 6:
+                    current.night += consumption.day
+                else:
+                    current.day += consumption.day
+
             current.tickers += 1
 
         # filter all hours that have less than 4 tickers (ensures complete data)
@@ -242,21 +249,56 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
             _LOGGER.debug("No consumption data to process")
             return
 
+        # Calculate cost for each hour
+        for consumption in consumptions.values():
+            consumption.day_cost = consumption.day * DAILY_PRICE_CHF
+            consumption.night_cost = consumption.night * NIGHTLY_PRICE_CHF
+
         # Process day and night consumption separately
         await self._insert_statistic_type(
-            consumptions, "day", ENERGY_DAY_CONSUMPTION_KEY, "Energy consumption (day)"
+            consumptions,
+            "day",
+            ENERGY_DAY_CONSUMPTION_KEY,
+            "Energy consumption (day)",
+            metadata={
+                "unit_of_measurement": UnitOfEnergy.KILO_WATT_HOUR,
+            },
         )
         await self._insert_statistic_type(
             consumptions,
             "night",
             ENERGY_NIGHT_CONSUMPTION_KEY,
             "Energy consumption (night)",
+            metadata={
+                "unit_of_measurement": UnitOfEnergy.KILO_WATT_HOUR,
+            },
         )
         await self._insert_statistic_type(
             consumptions,
             "total",
             ENERGY_CONSUMPTION_KEY,
             "Energy consumption (total)",
+            metadata={
+                "unit_of_measurement": UnitOfEnergy.KILO_WATT_HOUR,
+            },
+        )
+        await self._insert_statistic_type(
+            consumptions,
+            "day_cost",
+            ENERGY_CONSUMPTION_COST_DAY_KEY,
+            "Energy consumption cost (peak hours)",
+            metadata={
+                "unit_of_measurement": None,
+            },
+        )
+        await self._insert_statistic_type(
+            consumptions,
+            "night_cost",
+            ENERGY_CONSUMPTION_COST_NIGHT_KEY,
+            "Energy consumption cost (off-peak hours)",
+            metadata={
+                "unit_of_measurement": None,
+            },
         )
 
     async def _insert_statistic_type(
@@ -265,6 +307,7 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
         data_type: str,
         statistic_id: str,
         name: str,
+        metadata: dict = None,
     ) -> None:
         """Insert a specific type of statistic (day/night) into Home Assistant.
 
@@ -284,13 +327,6 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
             if last_stat and statistic_id in last_stat
             else None
         )
-
-        base_metadata = {
-            "has_mean": False,
-            "has_sum": True,
-            "source": DOMAIN,
-            "unit_of_measurement": UnitOfEnergy.KILO_WATT_HOUR,
-        }
 
         sum_value = (
             last_stat[statistic_id][0]["sum"]
@@ -314,6 +350,13 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
                     sum=sum_value,
                 )
             )
+
+        base_metadata = {
+            "has_mean": False,
+            "has_sum": True,
+            "source": DOMAIN,
+            **metadata,
+        }
 
         if statistics:
             metadata = StatisticMetaData(
