@@ -8,12 +8,22 @@
           "username": "Email",
           "password": "Password"
         }
+      },
+      "tariff": {
+        "title": "Energy Tariff Configuration",
+        "description": "Configure your electricity tariff settings. If you enable fixed tariff, you'll need to enter your peak (day) and off-peak (night) rates in CHF/kWh. Default values are set according to AIL standard rates.",
+        "data": {
+          "fixed_tariff": "Use fixed tariff rates",
+          "peak_price": "Peak (day) rate [CHF/kWh]",
+          "off_peak_price": "Off-peak (night) rate [CHF/kWh]"
+        }
       }
     },
     "error": {
       "cannot_connect": "Failed to connect to the service. Please check your internet connection and try again.",
       "invalid_auth": "Invalid authentication credentials. Please check your username and password.",
-      "unknown": "Unexpected error occurred. Please check the logs for more details."
+      "unknown": "Unexpected error occurred. Please check the logs for more details.",
+      "invalid_price": "Invalid price value. Please enter a valid number."
     },
     "abort": {
       "already_configured": "This account is already configured"
