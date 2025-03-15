@@ -21,7 +21,7 @@ from .const import (
     ENERGY_NIGHT_CONSUMPTION_KEY,
     ENERGY_DAY_CONSUMPTION_KEY,
     ENERGY_CONSUMPTION_KEY,
-    DEFAULT_UPDATE_INTERVAL_HOUR,
+    DEFAULT_UPDATE_INTERVAL_HOUR, CONSUMPTION_DATA_DAYS_TO_FETCH,
     DAILY_PRICE_CHF,
     NIGHTLY_PRICE_CHF,
     ENERGY_CONSUMPTION_COST_DAY_KEY,
@@ -132,7 +132,7 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
         if not await self.api_client.login():
             raise ConfigEntryAuthFailed
 
-        _from = datetime.now() - timedelta(days=4)
+        _from = datetime.now() - timedelta(days=CONSUMPTION_DATA_DAYS_TO_FETCH)
         _to = datetime.now()
         response = await self.api_client.get_consumption_data(_from, _to)
         consumption_data = ConsumptionData.from_api_response(response)
