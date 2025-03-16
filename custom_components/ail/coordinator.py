@@ -21,11 +21,13 @@ from .const import (
     ENERGY_NIGHT_CONSUMPTION_KEY,
     ENERGY_DAY_CONSUMPTION_KEY,
     ENERGY_CONSUMPTION_KEY,
-    DEFAULT_UPDATE_INTERVAL_HOUR, CONSUMPTION_DATA_DAYS_TO_FETCH,
+    DEFAULT_UPDATE_INTERVAL_HOUR,
+    CONSUMPTION_DATA_DAYS_TO_FETCH,
     DAILY_PRICE_CHF,
     NIGHTLY_PRICE_CHF,
     ENERGY_CONSUMPTION_COST_DAY_KEY,
-    ENERGY_CONSUMPTION_COST_NIGHT_KEY, CONF_FIXED_TARIFF,
+    ENERGY_CONSUMPTION_COST_NIGHT_KEY,
+    CONF_FIXED_TARIFF,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -197,7 +199,7 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
             _LOGGER.warning("No historical consumption data was retrieved")
 
     def _sum_hourly_consumptions(
-            self,
+        self,
         consumptions: List[ConsumptionData],
     ) -> Dict[datetime, ConsumptionData]:
         """Sum consumption records into hourly buckets.
