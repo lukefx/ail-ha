@@ -1,7 +1,7 @@
 {
   "name": "AIL: Aziende Industriali di Lugano",
   "render_readme": true,
-  "content_in_root": true,
+  "content_in_root": false,
   "country": ["CH"],
   "homeassistant": "2025.2.4",
   "hacs": "2.0.1"
