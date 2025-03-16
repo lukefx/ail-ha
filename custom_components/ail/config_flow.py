@@ -9,15 +9,23 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import selector
 
 from . import AILEnergyClient
-from .const import DOMAIN, CONF_USERNAME, CONF_PASSWORD, CONF_FIXED_TARIFF, CONF_PEAK_PRICE, CONF_OFF_PEAK_PRICE, \
-    DAILY_PRICE_CHF, NIGHTLY_PRICE_CHF
+from .const import (
+    DOMAIN,
+    CONF_USERNAME,
+    CONF_PASSWORD,
+    CONF_FIXED_TARIFF,
+    CONF_PEAK_PRICE,
+    CONF_OFF_PEAK_PRICE,
+    DAILY_PRICE_CHF,
+    NIGHTLY_PRICE_CHF,
+)
 
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for My Integration."""
 
     VERSION = 1
-    
+
     def __init__(self):
         """Initialize the config flow."""
         self.auth_data = None
@@ -93,8 +101,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         schema = vol.Schema(
             {
-                vol.Required(CONF_FIXED_TARIFF, default=False): selector.BooleanSelector(),
-                vol.Required(CONF_PEAK_PRICE, default=DAILY_PRICE_CHF): selector.NumberSelector(
+                vol.Required(
+                    CONF_FIXED_TARIFF, default=False
+                ): selector.BooleanSelector(),
+                vol.Required(
+                    CONF_PEAK_PRICE, default=DAILY_PRICE_CHF
+                ): selector.NumberSelector(
                     selector.NumberSelectorConfig(
                         min=0,
                         max=20,
@@ -102,7 +114,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         mode=selector.NumberSelectorMode.BOX,
                     ),
                 ),
-                vol.Required(CONF_OFF_PEAK_PRICE, default=NIGHTLY_PRICE_CHF): selector.NumberSelector(
+                vol.Required(
+                    CONF_OFF_PEAK_PRICE, default=NIGHTLY_PRICE_CHF
+                ): selector.NumberSelector(
                     selector.NumberSelectorConfig(
                         min=0,
                         max=20,

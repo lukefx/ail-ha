@@ -1,11 +1,11 @@
 {
   "domain": "ail",
   "name": "AIL: Aziende Industriali di Lugano",
-  "documentation": "https://github.com/lukefx/ail-ha",
-  "config_flow": true,
-  "dependencies": [],
   "codeowners": ["@lukefx"],
-  "requirements": ["voluptuous"],
+  "config_flow": true,
+  "dependencies": ["recorder"],
+  "documentation": "https://github.com/lukefx/ail-ha",
   "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/lukefx/ail-ha/issues",
   "version": "0.0.2"
 }

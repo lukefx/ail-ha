@@ -11,7 +11,6 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from custom_components.ail.api_client import AILEnergyClient
 from custom_components.ail.const import DOMAIN
 from custom_components.ail.coordinator import EnergyDataUpdateCoordinator
-from custom_components.ail.sensor import EnergySensor
 
 _LOGGER = logging.getLogger(__name__)
 
