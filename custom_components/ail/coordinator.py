@@ -227,9 +227,10 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
             if self.entry.options.get(CONF_FIXED_TARIFF):
                 current.day += consumption.day
             else:
-                # between 00:00 and 06:00 is considered night (off-peak hours)
-                # between 06:00 and 00:00 is considered day (peak hours)
-                if 0 <= current.from_date.hour < 6 and 0 <= current.to_date.hour <= 6:
+                # https://www.ail.ch/privati/elettricita/servizi/tariffe.html
+                # between 22:00 and 06:00 is considered night (off-peak hours)
+                # between 06:00 and 22:00 is considered day (peak hours)
+                if 22 <= current.from_date.hour or current.from_date.hour < 6:
                     current.night += consumption.day
                 else:
                     current.day += consumption.day
