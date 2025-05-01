@@ -121,56 +121,12 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
         else:
             _LOGGER.info("Statistics already exist, skipping historical data fetch")
 
-    async def _async_update_data(self) -> Optional[ConsumptionData]:
-        """Update data via API and update statistics.
-
-        Returns:
-            The latest consumption data or None if no data is available
-
-        Raises:
-            ConfigEntryAuthFailed: If authentication fails
-            UpdateFailed: If data cannot be fetched or processed
-        """
-        if not await self.api_client.login():
-            raise ConfigEntryAuthFailed
-
-        _from = datetime.now() - timedelta(days=CONSUMPTION_DATA_DAYS_TO_FETCH)
-        _to = datetime.now()
-        response = await self.api_client.get_consumption_data(_from, _to)
-        consumption_data = ConsumptionData.from_api_response(response)
-        _LOGGER.debug("Updated consumption data: %s", consumption_data)
-
-        # Process hourly consumptions
-        hourly_data = self._sum_hourly_consumptions(consumption_data)
-
-        # Handle empty consumption_stats array
-        if not hourly_data:
-            _LOGGER.warning("No consumption data received from API")
-            return None
-
-        await self._insert_statistics(hourly_data)
-
-        # Return the most recent consumption data if available
-        if consumption_data:
-            return consumption_data[-1]
-        return None
-
-    async def _fetch_historical_data(self) -> None:
-        """Fetch historical data for the past 90 days.
-
-        Raises:
-            ConfigEntryAuthFailed: If authentication fails
-        """
-        # Fetch historical data for the last 3 months in smaller chunks
-        end_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        start_date = end_date - timedelta(days=90)  # last 3 months
-
+    async def _fetch_chunked_data(
+        self, start_date: datetime, end_date: datetime
+    ) -> Dict[datetime, ConsumptionData]:
+        """Fetch data in 4-day chunks and aggregate results."""
         chunk_size = timedelta(days=4)
         chunk_start = start_date
-
-        if not await self.api_client.login():
-            raise ConfigEntryAuthFailed
-
         all_consumption_data: Dict[datetime, ConsumptionData] = {}
         while chunk_start < end_date:
             chunk_end = min(chunk_start + chunk_size, end_date)
@@ -187,8 +143,51 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
                 _LOGGER.error(
                     "Error fetching chunk %s to %s: %s", chunk_start, chunk_end, err
                 )
-            # Move to next chunk regardless of success to try to get as much data as possible
             chunk_start = chunk_end
+        return all_consumption_data
+
+    async def _async_update_data(self) -> Optional[ConsumptionData]:
+        """Update data via API and update statistics.
+
+        Returns:
+            The latest consumption data or None if no data is available
+
+        Raises:
+            ConfigEntryAuthFailed: If authentication fails
+            UpdateFailed: If data cannot be fetched or processed
+        """
+        if not await self.api_client.login():
+            raise ConfigEntryAuthFailed
+
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=CONSUMPTION_DATA_DAYS_TO_FETCH)
+        all_consumption_data = await self._fetch_chunked_data(start_date, end_date)
+
+        if not all_consumption_data:
+            _LOGGER.warning("No consumption data received from API")
+            return None
+
+        await self._insert_statistics(all_consumption_data)
+
+        # Return the latest consumption if available
+        latest_consumption = max(
+            all_consumption_data.values(), key=lambda c: c.to_date, default=None
+        )
+        return latest_consumption
+
+    async def _fetch_historical_data(self) -> None:
+        """Fetch historical data for the past 90 days.
+
+        Raises:
+            ConfigEntryAuthFailed: If authentication fails
+        """
+        end_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        start_date = end_date - timedelta(days=90)  # last 3 months
+
+        if not await self.api_client.login():
+            raise ConfigEntryAuthFailed
+
+        all_consumption_data = await self._fetch_chunked_data(start_date, end_date)
 
         if all_consumption_data:
             _LOGGER.info(
