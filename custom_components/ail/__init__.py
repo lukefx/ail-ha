@@ -2,6 +2,7 @@
 
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -9,7 +10,17 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from custom_components.ail.api_client import AILEnergyClient
-from custom_components.ail.const import DOMAIN
+from custom_components.ail.const import (
+    DOMAIN,
+    CONF_FIXED_TARIFF,
+    CONF_PEAK_PRICE,
+    CONF_OFF_PEAK_PRICE,
+    LEGACY_CONF_FIXED_TARIFF,
+    LEGACY_CONF_PEAK_PRICE,
+    LEGACY_CONF_OFF_PEAK_PRICE,
+    DAILY_PRICE_CHF,
+    NIGHTLY_PRICE_CHF,
+)
 from custom_components.ail.coordinator import EnergyDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -27,6 +38,8 @@ PLATFORMS = [Platform.SENSOR]
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up from a config entry."""
+    _migrate_tariff_options(hass, entry)
+
     # Create coordinator
     client = AILEnergyClient(entry.data["username"], entry.data["password"])
     data_coordinator = EnergyDataUpdateCoordinator(hass, entry, client)
@@ -48,3 +61,39 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
     return unload_ok
+
+
+def _migrate_tariff_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Ensure tariff settings are stored in entry options."""
+    options = dict(entry.options)
+    data = entry.data
+
+    def _get_value(key: str, legacy_key: str, default: Any) -> Any:
+        if key in options:
+            return options[key]
+        if key in data:
+            return data[key]
+        if legacy_key in options:
+            return options[legacy_key]
+        if legacy_key in data:
+            return data[legacy_key]
+        return default
+
+    legacy_option_keys = {
+        LEGACY_CONF_FIXED_TARIFF,
+        LEGACY_CONF_PEAK_PRICE,
+        LEGACY_CONF_OFF_PEAK_PRICE,
+    }
+    new_options = {k: v for k, v in options.items() if k not in legacy_option_keys}
+    new_options[CONF_FIXED_TARIFF] = bool(
+        _get_value(CONF_FIXED_TARIFF, LEGACY_CONF_FIXED_TARIFF, False)
+    )
+    new_options[CONF_PEAK_PRICE] = float(
+        _get_value(CONF_PEAK_PRICE, LEGACY_CONF_PEAK_PRICE, DAILY_PRICE_CHF)
+    )
+    new_options[CONF_OFF_PEAK_PRICE] = float(
+        _get_value(CONF_OFF_PEAK_PRICE, LEGACY_CONF_OFF_PEAK_PRICE, NIGHTLY_PRICE_CHF)
+    )
+
+    if new_options != options:
+        hass.config_entries.async_update_entry(entry, options=new_options)

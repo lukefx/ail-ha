@@ -2,9 +2,13 @@ DOMAIN = "ail"
 
 CONF_USERNAME = "username"
 CONF_PASSWORD = "password"
-CONF_FIXED_TARIFF = "Flex Tariff"
-CONF_PEAK_PRICE = "Peak price"
-CONF_OFF_PEAK_PRICE = "Off-Peak Price"
+CONF_FIXED_TARIFF = "fixed_tariff"
+CONF_PEAK_PRICE = "peak_price"
+CONF_OFF_PEAK_PRICE = "off_peak_price"
+
+LEGACY_CONF_FIXED_TARIFF = "Flex Tariff"
+LEGACY_CONF_PEAK_PRICE = "Peak price"
+LEGACY_CONF_OFF_PEAK_PRICE = "Off-Peak Price"
 
 # Statistic IDs for Home Assistant Energy dashboard
 ENERGY_CONSUMPTION_KEY = f"{DOMAIN}:energy_consumption"
