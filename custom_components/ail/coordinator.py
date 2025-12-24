@@ -1,7 +1,7 @@
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
@@ -28,6 +28,11 @@ from .const import (
     ENERGY_CONSUMPTION_COST_DAY_KEY,
     ENERGY_CONSUMPTION_COST_NIGHT_KEY,
     CONF_FIXED_TARIFF,
+    CONF_PEAK_PRICE,
+    CONF_OFF_PEAK_PRICE,
+    LEGACY_CONF_FIXED_TARIFF,
+    LEGACY_CONF_PEAK_PRICE,
+    LEGACY_CONF_OFF_PEAK_PRICE,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -213,6 +218,7 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
             return {}
 
         hourly_sums: Dict[datetime, ConsumptionData] = {}
+        use_fixed_tariff, _, _ = self._get_tariff_settings()
         for consumption in consumptions:
             hour_key = consumption.from_date.replace(minute=0, second=0, microsecond=0)
             if hour_key not in hourly_sums:
@@ -223,7 +229,7 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
 
             current = hourly_sums[hour_key]
 
-            if self.entry.options.get(CONF_FIXED_TARIFF):
+            if use_fixed_tariff:
                 current.day += consumption.day
             else:
                 # https://www.ail.ch/privati/elettricita/servizi/tariffe.html
@@ -252,9 +258,10 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
             return
 
         # Calculate cost for each hour
+        _, peak_price, off_peak_price = self._get_tariff_settings()
         for consumption in consumptions.values():
-            consumption.day_cost = consumption.day * DAILY_PRICE_CHF
-            consumption.night_cost = consumption.night * NIGHTLY_PRICE_CHF
+            consumption.day_cost = consumption.day * peak_price
+            consumption.night_cost = consumption.night * off_peak_price
 
         # Process day and night consumption separately
         await self._insert_statistic_type(
@@ -368,3 +375,32 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
             )
             async_add_external_statistics(self.hass, metadata, statistics)
             _LOGGER.debug("Added %d statistics for %s", len(statistics), name)
+
+    def _get_tariff_settings(self) -> Tuple[bool, float, float]:
+        """Return fixed tariff flag and peak/off-peak rates."""
+        options = self.entry.options
+        data = self.entry.data
+
+        def _get_value(key: str, legacy_key: str, default: Any) -> Any:
+            if key in options:
+                return options[key]
+            if key in data:
+                return data[key]
+            if legacy_key in options:
+                return options[legacy_key]
+            if legacy_key in data:
+                return data[legacy_key]
+            return default
+
+        fixed_tariff = bool(
+            _get_value(CONF_FIXED_TARIFF, LEGACY_CONF_FIXED_TARIFF, False)
+        )
+        peak_price = float(
+            _get_value(CONF_PEAK_PRICE, LEGACY_CONF_PEAK_PRICE, DAILY_PRICE_CHF)
+        )
+        off_peak_price = float(
+            _get_value(
+                CONF_OFF_PEAK_PRICE, LEGACY_CONF_OFF_PEAK_PRICE, NIGHTLY_PRICE_CHF
+            )
+        )
+        return fixed_tariff, peak_price, off_peak_price
