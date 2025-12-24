@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional, List
 
 import aiohttp
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -25,10 +25,10 @@ class ConsumptionResponse(BaseModel):
 
     response: List[ConsumptionRecord]
 
-    class Config:
-        populate_by_name = True
-        exclude_none = True
-        json_encoders = {datetime: lambda v: v.isoformat()}
+    model_config = ConfigDict(
+        populate_by_name=True,
+        json_encoders={datetime: lambda v: v.isoformat()},
+    )
 
 
 class AILEnergyClient:

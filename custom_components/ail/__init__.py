@@ -8,13 +8,9 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from custom_components.ail.api_client import AILEnergyClient
 from custom_components.ail.const import DOMAIN
-from custom_components.ail.coordinator import EnergyDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
-
-type AilConfigEntry = ConfigEntry[RuntimeData]
 
 
 @dataclass
@@ -25,8 +21,17 @@ class RuntimeData:
 PLATFORMS = [Platform.SENSOR]
 
 
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Set up the integration from YAML (legacy)."""
+    hass.data.setdefault(DOMAIN, {})
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up from a config entry."""
+    from custom_components.ail.api_client import AILEnergyClient
+    from custom_components.ail.coordinator import EnergyDataUpdateCoordinator
+
     # Create coordinator
     client = AILEnergyClient(entry.data["username"], entry.data["password"])
     data_coordinator = EnergyDataUpdateCoordinator(hass, entry, client)
