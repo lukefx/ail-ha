@@ -1,3 +1,0 @@
-homeassistant
-pydantic
-psutil-home-assistant
