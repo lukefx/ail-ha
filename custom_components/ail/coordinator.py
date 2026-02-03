@@ -126,6 +126,10 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
         else:
             _LOGGER.info("Statistics already exist, skipping historical data fetch")
 
+    async def async_setup(self) -> None:
+        """Public setup hook for initial coordinator preparation."""
+        await self._async_setup()
+
     async def _fetch_chunked_data(
         self, start_date: datetime, end_date: datetime
     ) -> Dict[datetime, ConsumptionData]:
