@@ -35,7 +35,7 @@ class AILEnergyClient:
         self.email = email
         self.password = password
         self.token = None
-        self.meter_id = None
+        self._meter_id = None
         self.session = None
         self._headers = {
             "Cache-Control": "no-cache, max-age=0, must-revalidate",
@@ -48,8 +48,12 @@ class AILEnergyClient:
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+
+    async def close(self) -> None:
         if self.session:
             await self.session.close()
+            self.session = None
 
     async def login(self) -> bool:
         if not self.session:
@@ -79,15 +83,15 @@ class AILEnergyClient:
 
                 meter_match = re.search(r'"ID":\s*(\d+)', content)
                 if meter_match:
-                    self.meter_id = meter_match.group(1)
+                    self._meter_id = meter_match.group(1)
 
-                if self.token and self.meter_id:
+                if self.token and self._meter_id:
                     return True
 
             return False
 
-    def meter_id(self) -> Optional[str]:
-        return self.meter_id
+    def get_meter_id(self) -> Optional[str]:
+        return self._meter_id
 
     async def get_consumption_data(
         self, _from: datetime, _to: datetime
@@ -98,7 +102,7 @@ class AILEnergyClient:
             raise ValueError("Not logged in. Call login() first")
 
         payload = {
-            "meterID": self.meter_id,
+            "meterID": self._meter_id,
             "scale": "hours",
             "timeFrame": {
                 "from": _from.strftime("%Y-%m-%d %H:%M:%S"),
