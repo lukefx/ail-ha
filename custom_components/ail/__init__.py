@@ -48,6 +48,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     client = AILEnergyClient(entry.data["username"], entry.data["password"])
     data_coordinator = EnergyDataUpdateCoordinator(hass, entry, client)
 
+    # Run coordinator setup (historical fetch when needed)
+    await data_coordinator.async_setup()
+
     # Get initial data
     await data_coordinator.async_config_entry_first_refresh()
 
