@@ -74,3 +74,34 @@ async def test_async_setup_entry_skips_history_when_stats_exist(hass):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
         fetch_history.assert_not_awaited()
+
+
+async def test_async_unload_entry_closes_client(hass):
+    """Ensure unloading an entry closes the API client session."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"username": "user@example.com", "password": "secret"},
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.ail.api_client.AILEnergyClient.login", return_value=True
+    ), patch(
+        "custom_components.ail.coordinator.EnergyDataUpdateCoordinator._fetch_chunked_data",
+        return_value={},
+    ), patch(
+        "custom_components.ail.coordinator.get_instance",
+        return_value=_DummyRecorder(),
+    ), patch(
+        "custom_components.ail.coordinator.get_last_statistics",
+        return_value={},
+    ), patch(
+        "custom_components.ail.api_client.AILEnergyClient.close",
+        new=AsyncMock(),
+    ) as close_client:
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        assert await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()
+        close_client.assert_awaited()
