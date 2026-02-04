@@ -136,8 +136,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def _test_credentials(self, user_input):
         """Test if we can authenticate with the credentials."""
         client = AILEnergyClient(user_input[CONF_USERNAME], user_input[CONF_PASSWORD])
-        if not await client.login():
-            raise InvalidAuth()
+        try:
+            if not await client.login():
+                raise InvalidAuth()
+        finally:
+            await client.close()
 
 
 class CannotConnect(HomeAssistantError):
