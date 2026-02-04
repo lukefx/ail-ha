@@ -15,6 +15,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from custom_components.ail import DOMAIN
 from custom_components.ail.const import DAILY_PRICE_CHF, NIGHTLY_PRICE_CHF
@@ -73,7 +74,7 @@ SENSORS: tuple[EnergyEntityDescription, ...] = (
         suggested_display_precision=3,
         entity_registry_enabled_default=False,
         value_fn=lambda data: DAILY_PRICE_CHF
-        if 6 <= data.from_date.hour < 22
+        if 6 <= dt_util.as_local(data.from_date).hour < 22
         else NIGHTLY_PRICE_CHF,
     ),
 )
