@@ -14,6 +14,7 @@ from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.util import dt as dt_util
 
 from .api_client import AILEnergyClient, ConsumptionResponse
 from .const import (
@@ -168,7 +169,7 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
         if not await self.api_client.login():
             raise ConfigEntryAuthFailed
 
-        end_date = datetime.now()
+        end_date = dt_util.now()
         start_date = end_date - timedelta(days=CONSUMPTION_DATA_DAYS_TO_FETCH)
         all_consumption_data = await self._fetch_chunked_data(start_date, end_date)
 
@@ -190,7 +191,7 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
         Raises:
             ConfigEntryAuthFailed: If authentication fails
         """
-        end_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        end_date = dt_util.now().replace(hour=0, minute=0, second=0, microsecond=0)
         start_date = end_date - timedelta(days=90)  # last 3 months
 
         if not await self.api_client.login():
@@ -224,7 +225,8 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
         hourly_sums: Dict[datetime, ConsumptionData] = {}
         use_fixed_tariff, _, _ = self._get_tariff_settings()
         for consumption in consumptions:
-            hour_key = consumption.from_date.replace(minute=0, second=0, microsecond=0)
+            local_from = self._as_local(consumption.from_date)
+            hour_key = local_from.replace(minute=0, second=0, microsecond=0)
             if hour_key not in hourly_sums:
                 hourly_sums[hour_key] = ConsumptionData(
                     from_date=hour_key,
@@ -239,7 +241,7 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
                 # https://www.ail.ch/privati/elettricita/servizi/tariffe.html
                 # between 22:00 and 06:00 is considered night (off-peak hours)
                 # between 06:00 and 22:00 is considered day (peak hours)
-                if 22 <= current.from_date.hour or current.from_date.hour < 6:
+                if 22 <= hour_key.hour or hour_key.hour < 6:
                     current.night += consumption.day
                 else:
                     current.day += consumption.day
@@ -358,7 +360,7 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
             sum_value += value
             statistics.append(
                 StatisticData(
-                    start=hour,
+                    start=dt_util.as_utc(hour),
                     state=value,
                     sum=sum_value,
                 )
@@ -408,3 +410,10 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
             )
         )
         return fixed_tariff, peak_price, off_peak_price
+
+    @staticmethod
+    def _as_local(value: datetime) -> datetime:
+        """Ensure datetime is timezone-aware and in local time."""
+        if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+            return value.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE)
+        return dt_util.as_local(value)
