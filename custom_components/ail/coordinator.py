@@ -411,6 +411,16 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
         )
         return fixed_tariff, peak_price, off_peak_price
 
+    def get_current_price(self, at: datetime) -> float:
+        """Return the configured price for the given timestamp."""
+        fixed_tariff, peak_price, off_peak_price = self._get_tariff_settings()
+        if fixed_tariff:
+            return peak_price
+        local_hour = self._as_local(at).hour
+        if 22 <= local_hour or local_hour < 6:
+            return off_peak_price
+        return peak_price
+
     @staticmethod
     def _as_local(value: datetime) -> datetime:
         """Ensure datetime is timezone-aware and in local time."""

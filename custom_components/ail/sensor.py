@@ -130,6 +130,8 @@ class EnergySensor(CoordinatorEntity[EnergyDataUpdateCoordinator], SensorEntity)
         """Return the state of the sensor."""
         if not self.coordinator.data:
             return None
+        if self.entity_description.key == "cost":
+            return self.coordinator.get_current_price(self.coordinator.data.from_date)
         return self.entity_description.value_fn(self.coordinator.data)
 
     @property
