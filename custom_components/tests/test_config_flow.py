@@ -76,3 +76,32 @@ async def test_user_step_aborts_when_account_already_configured(hass):
 
     assert result["type"] == "abort"
     assert result["reason"] == "already_configured"
+
+
+@pytest.mark.asyncio
+async def test_user_step_aborts_for_legacy_entry_without_unique_id(hass):
+    """Ensure duplicate accounts are blocked for pre-unique-id entries."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_USERNAME: "user@example.com", CONF_PASSWORD: "secret"},
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.ail.config_flow.AILEnergyClient.login",
+        new=AsyncMock(return_value=True),
+    ), patch(
+        "custom_components.ail.config_flow.AILEnergyClient.close",
+        new=AsyncMock(),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": "user"},
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={CONF_USERNAME: "User@Example.com", CONF_PASSWORD: "secret"},
+        )
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "already_configured"

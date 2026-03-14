@@ -56,9 +56,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             try:
-                await self.async_set_unique_id(
-                    user_input[CONF_USERNAME].strip().lower()
-                )
+                normalized_username = user_input[CONF_USERNAME].strip().lower()
+                if self._is_username_already_configured(normalized_username):
+                    return self.async_abort(reason="already_configured")
+
+                await self.async_set_unique_id(normalized_username)
                 self._abort_if_unique_id_configured()
 
                 # Validate the credentials here if possible
@@ -150,6 +152,16 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 raise InvalidAuth()
         finally:
             await client.close()
+
+    def _is_username_already_configured(self, normalized_username: str) -> bool:
+        """Check for existing entries that match username (legacy-safe)."""
+        for entry in self._async_current_entries():
+            configured_username = entry.data.get(CONF_USERNAME)
+            if not configured_username:
+                continue
+            if configured_username.strip().lower() == normalized_username:
+                return True
+        return False
 
 
 class CannotConnect(HomeAssistantError):
