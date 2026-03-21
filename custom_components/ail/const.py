@@ -2,6 +2,8 @@ DOMAIN = "ail"
 
 CONF_USERNAME = "username"
 CONF_PASSWORD = "password"
+CONF_MFA_CODE = "mfa_code"
+CONF_SESSION_STATE = "session_state"
 CONF_FIXED_TARIFF = "fixed_tariff"
 CONF_PEAK_PRICE = "peak_price"
 CONF_OFF_PEAK_PRICE = "off_peak_price"

@@ -5,8 +5,15 @@
         "title": "AIL: Aziende Industriali di Lugano",
         "description": "Enter your credentials for AIL EnergyBuddy. You can find your account details at [{login_url}]({login_url}). If you don't have an account, you can create one at [{account_create_url}]({account_create_url}).",
         "data": {
-          "username": "Email",
+          "username": "Username",
           "password": "Password"
+        }
+      },
+      "mfa": {
+        "title": "AIL Email Verification",
+        "description": "AIL requested a second authentication step. Enter the verification code sent to your email address.",
+        "data": {
+          "mfa_code": "Verification code"
         }
       },
       "tariff": {
@@ -22,6 +29,7 @@
     "error": {
       "cannot_connect": "Failed to connect to the service. Please check your internet connection and try again.",
       "invalid_auth": "Invalid authentication credentials. Please check your username and password.",
+      "invalid_mfa_code": "The verification code was rejected. Request a new code and try again.",
       "unknown": "Unexpected error occurred. Please check the logs for more details.",
       "invalid_price": "Invalid price value. Please enter a valid number."
     },

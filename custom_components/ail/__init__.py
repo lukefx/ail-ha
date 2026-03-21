@@ -12,6 +12,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from custom_components.ail.api_client import AILEnergyClient
 from custom_components.ail.const import (
     DOMAIN,
+    CONF_SESSION_STATE,
     CONF_FIXED_TARIFF,
     CONF_PEAK_PRICE,
     CONF_OFF_PEAK_PRICE,
@@ -45,7 +46,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _migrate_tariff_options(hass, entry)
 
     # Create coordinator
-    client = AILEnergyClient(entry.data["username"], entry.data["password"])
+    client = AILEnergyClient(
+        entry.data["username"],
+        entry.data["password"],
+        session_state=entry.data.get(CONF_SESSION_STATE),
+    )
     data_coordinator = EnergyDataUpdateCoordinator(hass, entry, client)
 
     # Run coordinator setup (historical fetch when needed)
