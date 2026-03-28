@@ -211,14 +211,31 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
             _LOGGER.warning("No historical consumption data was retrieved")
 
     def _persist_session_state(self) -> None:
-        """Persist the latest authenticated session to the config entry."""
+        """Persist the latest authenticated session to the config entry.
+
+        To avoid excessive disk writes, this method:
+        - Skips updates when the exported session state is unchanged
+        - Throttles updates to at most once per defined interval
+        """
         session_state = self.api_client.export_session_state()
         if self.entry.data.get(CONF_SESSION_STATE) == session_state:
+            return
+
+        # Throttle how often we persist session state to avoid frequent I/O
+        now = dt_util.utcnow()
+        last_persist: Optional[datetime] = getattr(
+            self, "_last_session_state_persist", None
+        )
+        # Only persist if we have never persisted before or enough time has passed
+        min_interval = timedelta(minutes=5)
+        if last_persist is not None and now - last_persist < min_interval:
             return
 
         new_data = dict(self.entry.data)
         new_data[CONF_SESSION_STATE] = session_state
         self.hass.config_entries.async_update_entry(self.entry, data=new_data)
+        # Remember when we last persisted the session state
+        self._last_session_state_persist = now
 
     def _sum_hourly_consumptions(
         self,
