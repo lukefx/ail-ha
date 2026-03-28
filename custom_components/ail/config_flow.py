@@ -57,6 +57,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
         if user_input is not None:
+            # A fresh login attempt should not keep any prior MFA session alive.
+            await self._close_auth_client()
+            self.auth_data = None
             try:
                 # Validate the credentials here if possible
                 await self._test_credentials(user_input)
@@ -110,7 +113,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if not self._auth_client or not self._auth_client.is_mfa_pending():
                     # Clear any stale authentication state so the user can
                     # restart the authentication flow cleanly.
-                    self._auth_client = None
+                    await self._close_auth_client()
                     self.auth_data = None
                     errors["base"] = "mfa_session_expired"
                 else:
@@ -128,6 +131,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except InvalidAuth:
                 errors["base"] = "invalid_mfa_code"
             except Exception:  # pylint: disable=broad-except
+                await self._close_auth_client()
+                self.auth_data = None
                 errors["base"] = "unknown"
 
         return self.async_show_form(
