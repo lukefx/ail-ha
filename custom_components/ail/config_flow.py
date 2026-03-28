@@ -104,19 +104,26 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             try:
+                # If there is no active MFA session, treat this as an expired
+                # or missing MFA state rather than an invalid MFA code.
                 if not self._auth_client or not self._auth_client.is_mfa_pending():
-                    raise InvalidAuth()
+                    # Clear any stale authentication state so the user can
+                    # restart the authentication flow cleanly.
+                    self._auth_client = None
+                    self.auth_data = None
+                    errors["base"] = "mfa_session_expired"
+                else:
+                    if not await self._auth_client.submit_mfa_code(
+                        user_input[CONF_MFA_CODE]
+                    ):
+                        # This specifically indicates a bad MFA code.
+                        raise InvalidAuth()
 
-                if not await self._auth_client.submit_mfa_code(
-                    user_input[CONF_MFA_CODE]
-                ):
-                    raise InvalidAuth()
-
-                self.auth_data[CONF_SESSION_STATE] = (
-                    self._auth_client.export_session_state()
-                )
-                await self._close_auth_client()
-                return await self.async_step_tariff()
+                    self.auth_data[CONF_SESSION_STATE] = (
+                        self._auth_client.export_session_state()
+                    )
+                    await self._close_auth_client()
+                    return await self.async_step_tariff()
             except InvalidAuth:
                 errors["base"] = "invalid_mfa_code"
             except Exception:  # pylint: disable=broad-except
