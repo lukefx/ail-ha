@@ -7,12 +7,15 @@ from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import selector
+from typing import Any
 
 from . import AILEnergyClient
 from .const import (
     DOMAIN,
     CONF_USERNAME,
     CONF_PASSWORD,
+    CONF_MFA_CODE,
+    CONF_SESSION_STATE,
     CONF_FIXED_TARIFF,
     CONF_PEAK_PRICE,
     CONF_OFF_PEAK_PRICE,
@@ -29,6 +32,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self):
         """Initialize the config flow."""
         self.auth_data = None
+        self._auth_client = None
 
     async def async_step_user(
         self, user_input: dict[str, any] | None = None
@@ -53,6 +57,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
         if user_input is not None:
+            # A fresh login attempt should not keep any prior MFA session alive.
+            await self._close_auth_client()
+            self.auth_data = None
             try:
                 # Validate the credentials here if possible
                 await self._test_credentials(user_input)
@@ -65,6 +72,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "cannot_connect"
             except InvalidAuth:
                 errors["base"] = "invalid_auth"
+            except MFARequired:
+                self.auth_data = {
+                    CONF_USERNAME: user_input[CONF_USERNAME],
+                    CONF_PASSWORD: user_input[CONF_PASSWORD],
+                }
+                return await self.async_step_mfa()
             except Exception:  # pylint: disable=broad-except
                 errors["base"] = "unknown"
 
@@ -78,8 +91,58 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    async def async_step_mfa(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle the second authentication factor step."""
+        errors = {}
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_MFA_CODE): selector.TextSelector(
+                    selector.TextSelectorConfig(
+                        type=selector.TextSelectorType.TEXT,
+                    ),
+                )
+            }
+        )
+
+        if user_input is not None:
+            try:
+                # If there is no active MFA session, treat this as an expired
+                # or missing MFA state rather than an invalid MFA code.
+                if not self._auth_client or not self._auth_client.is_mfa_pending():
+                    # Clear any stale authentication state so the user can
+                    # restart the authentication flow cleanly.
+                    await self._close_auth_client()
+                    self.auth_data = None
+                    errors["base"] = "mfa_session_expired"
+                else:
+                    if not await self._auth_client.submit_mfa_code(
+                        user_input[CONF_MFA_CODE]
+                    ):
+                        # This specifically indicates a bad MFA code.
+                        raise InvalidAuth()
+
+                    self.auth_data[CONF_SESSION_STATE] = (
+                        self._auth_client.export_session_state()
+                    )
+                    await self._close_auth_client()
+                    return await self.async_step_tariff()
+            except InvalidAuth:
+                errors["base"] = "invalid_mfa_code"
+            except Exception:  # pylint: disable=broad-except
+                await self._close_auth_client()
+                self.auth_data = None
+                errors["base"] = "unknown"
+
+        return self.async_show_form(
+            step_id="mfa",
+            data_schema=schema,
+            errors=errors,
+        )
+
     async def async_step_tariff(
-        self, user_input: dict[str, any] | None = None
+        self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Handle the tariff configuration step."""
         errors = {}
@@ -138,9 +201,20 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         client = AILEnergyClient(user_input[CONF_USERNAME], user_input[CONF_PASSWORD])
         try:
             if not await client.login():
+                if client.is_mfa_pending():
+                    self._auth_client = client
+                    raise MFARequired()
                 raise InvalidAuth()
+            user_input[CONF_SESSION_STATE] = client.export_session_state()
         finally:
-            await client.close()
+            if client is not self._auth_client:
+                await client.close()
+
+    async def _close_auth_client(self) -> None:
+        """Close and clear the in-flight auth client."""
+        if self._auth_client:
+            await self._auth_client.close()
+            self._auth_client = None
 
 
 class CannotConnect(HomeAssistantError):
@@ -149,3 +223,7 @@ class CannotConnect(HomeAssistantError):
 
 class InvalidAuth(HomeAssistantError):
     """Error to indicate there is invalid auth."""
+
+
+class MFARequired(HomeAssistantError):
+    """Error to indicate MFA is required to complete login."""
