@@ -70,3 +70,18 @@ def test_export_session_state_includes_restorable_cookies():
             }
         ],
     }
+
+
+def test_build_keycloak_login_payload_enables_remember_me():
+    """Send remember-me using the parameter name observed on the live form."""
+    client = AILEnergyClient("user@example.com", "secret")
+
+    payload = client._build_keycloak_login_payload()
+
+    assert payload == {
+        "username": "user@example.com",
+        "password": "secret",
+        "credentialId": "",
+        "login": "ACCEDI",
+        "rememberMe": "on",
+    }
