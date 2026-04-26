@@ -140,12 +140,7 @@ class AILEnergyClient:
     async def _submit_keycloak_credentials(
         self, form_action: str, referer: str
     ) -> Optional[tuple[str, str]]:
-        login_payload = {
-            "username": self.email,
-            "password": self.password,
-            "credentialId": "",
-            "login": "ACCEDI",
-        }
+        login_payload = self._build_keycloak_login_payload()
 
         async with self.session.post(
             form_action,
@@ -301,6 +296,18 @@ class AILEnergyClient:
             self.session.cookie_jar.update_cookies(
                 cookie, response_url=URL.build(scheme="https", host=domain)
             )
+
+    def _build_keycloak_login_payload(
+        self,
+    ) -> Dict[str, str]:
+        """Build the Keycloak login payload with remember-me enabled."""
+        return {
+            "username": self.email,
+            "password": self.password,
+            "credentialId": "",
+            "login": "ACCEDI",
+            "rememberMe": "on",
+        }
 
     @staticmethod
     def _extract_token(content: str) -> Optional[str]:
