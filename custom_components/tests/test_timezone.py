@@ -6,11 +6,16 @@ from unittest.mock import patch
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.const import UnitOfEnergy
 from homeassistant.util import dt as dt_util
 
 from custom_components.ail.api_client import AILEnergyClient
-from custom_components.ail.const import DOMAIN
-from custom_components.ail.coordinator import ConsumptionData, EnergyDataUpdateCoordinator
+from custom_components.ail.const import DOMAIN, ENERGY_DAY_CONSUMPTION_KEY
+from custom_components.ail.coordinator import (
+    ConsumptionData,
+    EnergyDataUpdateCoordinator,
+    StatisticMeanType,
+)
 
 
 class _DummyRecorder:
@@ -111,5 +116,97 @@ async def test_insert_statistics_uses_utc_start(hass):
 
         assert "stats" in captured
         assert captured["stats"][0]["start"].tzinfo == dt_util.UTC
+    finally:
+        dt_util.set_default_time_zone(dt_util.UTC)
+
+
+@pytest.mark.asyncio
+async def test_insert_statistics_includes_mean_type_and_unit_class(hass):
+    """Energy statistics metadata must carry mean_type and unit_class (req. 2026.11)."""
+    tz = dt_util.get_time_zone("Europe/Zurich")
+    dt_util.set_default_time_zone(tz)
+    try:
+        coordinator = _make_coordinator(hass)
+        local_hour = dt_util.now().replace(minute=0, second=0, microsecond=0)
+        consumptions = {
+            local_hour: ConsumptionData(
+                from_date=local_hour,
+                to_date=local_hour + timedelta(hours=1),
+                day=1.0,
+            )
+        }
+        captured = {}
+
+        def _capture_stats(_hass, metadata, statistics):
+            captured["metadata"] = metadata
+
+        with patch(
+            "custom_components.ail.coordinator.get_last_statistics", return_value={}
+        ), patch(
+            "custom_components.ail.coordinator.get_instance",
+            return_value=_DummyRecorder(),
+        ), patch(
+            "custom_components.ail.coordinator.async_add_external_statistics",
+            new=_capture_stats,
+        ):
+            await coordinator._insert_statistic_type(
+                consumptions,
+                "day",
+                ENERGY_DAY_CONSUMPTION_KEY,
+                "Energy consumption (day)",
+                metadata={"unit_of_measurement": UnitOfEnergy.KILO_WATT_HOUR},
+            )
+
+        meta = captured["metadata"]
+        assert meta["mean_type"] == StatisticMeanType.NONE
+        assert meta["unit_class"] == "energy"
+        assert meta["has_mean"] is False
+        assert meta["has_sum"] is True
+    finally:
+        dt_util.set_default_time_zone(dt_util.UTC)
+
+
+@pytest.mark.asyncio
+async def test_insert_statistics_cost_uses_no_unit_class(hass):
+    """Cost statistics (no unit) must not get an energy unit_class."""
+    tz = dt_util.get_time_zone("Europe/Zurich")
+    dt_util.set_default_time_zone(tz)
+    try:
+        coordinator = _make_coordinator(hass)
+        local_hour = dt_util.now().replace(minute=0, second=0, microsecond=0)
+        consumptions = {
+            local_hour: ConsumptionData(
+                from_date=local_hour,
+                to_date=local_hour + timedelta(hours=1),
+                day=1.0,
+            )
+        }
+        captured = {}
+
+        def _capture_stats(_hass, metadata, statistics):
+            captured["metadata"] = metadata
+
+        with patch(
+            "custom_components.ail.coordinator.get_last_statistics", return_value={}
+        ), patch(
+            "custom_components.ail.coordinator.get_instance",
+            return_value=_DummyRecorder(),
+        ), patch(
+            "custom_components.ail.coordinator.async_add_external_statistics",
+            new=_capture_stats,
+        ):
+            await coordinator._insert_statistic_type(
+                consumptions,
+                "day",
+                "test:stat",
+                "Test stat",
+                metadata={"unit_of_measurement": None},
+            )
+
+        meta = captured["metadata"]
+        assert meta["mean_type"] == StatisticMeanType.NONE
+        assert meta["unit_class"] is None
+        assert meta["has_mean"] is False
+        assert meta["has_sum"] is True
     finally:
         dt_util.set_default_time_zone(dt_util.UTC)

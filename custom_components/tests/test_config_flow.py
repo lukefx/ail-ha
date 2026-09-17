@@ -76,7 +76,9 @@ async def test_test_credentials_stores_session_state(hass):
 
 
 @pytest.mark.asyncio
-async def test_test_credentials_raises_mfa_required_without_closing_pending_client(hass):
+async def test_test_credentials_raises_mfa_required_without_closing_pending_client(
+    hass,
+):
     """Preserve the in-progress auth client when MFA is required."""
     flow = ConfigFlow()
     flow.hass = hass
@@ -111,7 +113,9 @@ async def test_async_step_user_closes_stale_mfa_client_before_new_login(hass):
         CONF_PASSWORD: "old-secret",
     }
 
-    with patch.object(flow, "_test_credentials", new=AsyncMock()) as test_credentials, patch.object(
+    with patch.object(
+        flow, "_test_credentials", new=AsyncMock()
+    ) as test_credentials, patch.object(
         flow, "async_step_tariff", new=AsyncMock(return_value={"type": "form"})
     ) as async_step_tariff:
         result = await flow.async_step_user(

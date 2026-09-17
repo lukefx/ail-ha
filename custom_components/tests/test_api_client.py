@@ -14,7 +14,7 @@ def test_extract_token_from_page_script():
 
 def test_extract_meter_id_from_selected_meter():
     """Extract the selected meter from the page bootstrap data."""
-    html = '<script>aWattgarde.Page.SelectedMeterID = 987654;</script>'
+    html = "<script>aWattgarde.Page.SelectedMeterID = 987654;</script>"
 
     assert AILEnergyClient._extract_meter_id(html) == "987654"
 

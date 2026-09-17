@@ -1,6 +1,6 @@
 """Tests for tariff-aware sensors."""
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -13,7 +13,10 @@ from custom_components.ail.const import (
     CONF_PEAK_PRICE,
     DOMAIN,
 )
-from custom_components.ail.coordinator import ConsumptionData, EnergyDataUpdateCoordinator
+from custom_components.ail.coordinator import (
+    ConsumptionData,
+    EnergyDataUpdateCoordinator,
+)
 from custom_components.ail.sensor import EnergySensor, SENSORS
 
 
