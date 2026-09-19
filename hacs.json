@@ -3,6 +3,6 @@
   "render_readme": true,
   "content_in_root": false,
   "country": ["CH"],
-  "homeassistant": "2025.2.4",
+  "homeassistant": "2025.4.0",
   "hacs": "2.0.1"
 }

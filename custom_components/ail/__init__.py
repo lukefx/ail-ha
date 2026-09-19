@@ -7,6 +7,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from custom_components.ail.api_client import AILEnergyClient
@@ -33,6 +34,10 @@ class RuntimeData:
 
 
 PLATFORMS = [Platform.SENSOR]
+
+# The integration is only set up via config entries; the async_setup below
+# exists to satisfy legacy YAML setup and takes no configuration.
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:

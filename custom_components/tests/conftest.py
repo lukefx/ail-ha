@@ -1,4 +1,5 @@
 """Global fixtures for ail-ha integration."""
+
 from unittest.mock import patch
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 def auto_enable_custom_integrations(enable_custom_integrations):
     """Enable custom integrations for tests."""
     yield
+
 
 # This fixture is used to prevent HomeAssistant from attempting to create and dismiss persistent
 # notifications. These calls would fail without this fixture since the persistent_notification
@@ -26,9 +28,7 @@ def skip_notifications_fixture():
 @pytest.fixture(name="bypass_get_data")
 def bypass_get_data_fixture():
     """Skip calls to get data from API."""
-    with patch(
-        "custom_components.ail.api_client.AILEnergyClient.get_consumption_data"
-    ):
+    with patch("custom_components.ail.api_client.AILEnergyClient.get_consumption_data"):
         yield
 
 

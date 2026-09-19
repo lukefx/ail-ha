@@ -23,6 +23,7 @@ jobs:
           with:
             python-version: "3.13"
             cache: "pip"
+            cache-dependency-path: "**/requirements*.txt"
 
         - name: "Install requirements"
           run: python3 -m pip install -r requirements_dev.txt

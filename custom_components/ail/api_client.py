@@ -292,7 +292,9 @@ class AILEnergyClient:
                 cookie[cookie_data["name"]]["domain"] = cookie_data["domain"]
             if cookie_data.get("path"):
                 cookie[cookie_data["name"]]["path"] = cookie_data["path"]
-            domain = cookie_data.get("domain", "").lstrip(".") or URL(self.BASE_URL).host
+            domain = (
+                cookie_data.get("domain", "").lstrip(".") or URL(self.BASE_URL).host
+            )
             self.session.cookie_jar.update_cookies(
                 cookie, response_url=URL.build(scheme="https", host=domain)
             )

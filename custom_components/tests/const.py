@@ -1,4 +1,5 @@
 """Constants for {{cookiecutter.friendly_name}} tests."""
+
 from custom_components.ail.const import (
     CONF_PASSWORD,
 )

@@ -122,7 +122,6 @@ class EnergySensor(CoordinatorEntity[EnergyDataUpdateCoordinator], SensorEntity)
             "manufacturer": "AIL Lugano",
             "model": "Energy Buddy",
             "sw_version": "1.0",
-            "via_device": None,
         }
 
     @property

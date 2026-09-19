@@ -4,7 +4,11 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple
 
 from homeassistant.components.recorder import get_instance
-from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
+from homeassistant.components.recorder.models import (
+    StatisticData,
+    StatisticMeanType,
+    StatisticMetaData,
+)
 from homeassistant.components.recorder.statistics import (
     async_add_external_statistics,
     get_last_statistics,
@@ -400,6 +404,12 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
             "has_mean": False,
             "has_sum": True,
             "source": DOMAIN,
+            "mean_type": StatisticMeanType.NONE,
+            "unit_class": (
+                "energy"
+                if metadata.get("unit_of_measurement") == UnitOfEnergy.KILO_WATT_HOUR
+                else None
+            ),
             **metadata,
         }
 
