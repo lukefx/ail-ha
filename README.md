@@ -8,6 +8,7 @@ This integration allows you to monitor your energy consumption data from Aziende
 - Separate day and night consumption tracking
 - Energy dashboard integration
 - Cost calculation based on peak and off-peak rates
+- Estimated weekly consumption by Energy Buddy appliance category
 
 ## Installation
 
@@ -47,6 +48,8 @@ After setup, the integration will create the following entities:
 - Sensor for night consumption (Last parsed hour)
 - Sensor for total consumption
 - Sensor for current price of energy consumption
+- Sensor for estimated total weekly consumption
+- One estimated weekly consumption sensor per Energy Buddy appliance category
 - Statistics sensor for daily consumption
 - Statistics sensor for daily cost
 - Statistics sensor for nightly consumption
@@ -54,7 +57,11 @@ After setup, the integration will create the following entities:
 - Statistics sensor for total consumption
 - Statistics sensor for total cost
 
-You can add these to the Energy dashboard in Home Assistant to visualize your energy usage.
+You can add the cumulative consumption statistics to Home Assistant's Energy dashboard.
+
+Category sensors are provider-generated estimates, not additional meter readings. They
+use the `measurement` state class and are intentionally kept separate from the
+authoritative cumulative totals used by the Energy dashboard.
 
 ## Support
 

@@ -1,7 +1,7 @@
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -18,6 +18,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from custom_components.ail import DOMAIN
+from custom_components.ail.api_client import EstimatedConsumptionCategory
 from custom_components.ail.const import DAILY_PRICE_CHF, NIGHTLY_PRICE_CHF
 from custom_components.ail.coordinator import (
     ConsumptionData,
@@ -88,10 +89,51 @@ async def async_setup_entry(
     """Set up AIL energy sensors based on config entry."""
     coordinator: EnergyDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    # Create all sensors from the SENSORS description tuple
+    # Create measured-consumption sensors from the static descriptions.
     entities = [EnergySensor(coordinator, description) for description in SENSORS]
-
     async_add_entities(entities)
+
+    known_breakdown_entities: set[str] = set()
+
+    def add_breakdown_entities() -> None:
+        """Add new provider categories while preserving existing entity IDs."""
+        breakdown = coordinator.estimated_breakdown
+        if breakdown is None:
+            return
+
+        new_entities: list[SensorEntity] = []
+        if "total" not in known_breakdown_entities:
+            known_breakdown_entities.add("total")
+            new_entities.append(EstimatedWeeklyTotalSensor(coordinator))
+
+        for category in breakdown.categories:
+            if category.stable_key in known_breakdown_entities:
+                continue
+            known_breakdown_entities.add(category.stable_key)
+            new_entities.append(
+                EstimatedWeeklyCategorySensor(
+                    coordinator,
+                    category.stable_key,
+                    category.name,
+                )
+            )
+
+        if new_entities:
+            async_add_entities(new_entities)
+
+    add_breakdown_entities()
+    entry.async_on_unload(coordinator.async_add_listener(add_breakdown_entities))
+
+
+def _device_info(coordinator: EnergyDataUpdateCoordinator) -> dict[str, Any]:
+    """Return common device metadata for AIL entities."""
+    return {
+        "identifiers": {(DOMAIN, coordinator.entry.entry_id)},
+        "name": "AIL Energy Consumption",
+        "manufacturer": "AIL Lugano",
+        "model": "Energy Buddy",
+        "sw_version": "1.0",
+    }
 
 
 class EnergySensor(CoordinatorEntity[EnergyDataUpdateCoordinator], SensorEntity):
@@ -116,13 +158,7 @@ class EnergySensor(CoordinatorEntity[EnergyDataUpdateCoordinator], SensorEntity)
         self._attr_icon = description.icon
 
         # Add device info
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, coordinator.entry.entry_id)},
-            "name": "AIL Energy Consumption",
-            "manufacturer": "AIL Lugano",
-            "model": "Energy Buddy",
-            "sw_version": "1.0",
-        }
+        self._attr_device_info = _device_info(coordinator)
 
     @property
     def native_value(self) -> StateType:
@@ -139,3 +175,93 @@ class EnergySensor(CoordinatorEntity[EnergyDataUpdateCoordinator], SensorEntity)
         if not self.coordinator.data:
             return None
         return self.coordinator.data.from_date
+
+
+class EstimatedWeeklyTotalSensor(
+    CoordinatorEntity[EnergyDataUpdateCoordinator], SensorEntity
+):
+    """Energy Buddy's modeled total weekly consumption."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Estimated weekly consumption"
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 2
+    _attr_icon = "mdi:chart-pie"
+
+    def __init__(self, coordinator: EnergyDataUpdateCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = (
+            f"{DOMAIN}_{coordinator.entry.entry_id}_estimated_weekly_total"
+        )
+        self._attr_device_info = _device_info(coordinator)
+
+    @property
+    def native_value(self) -> StateType:
+        breakdown = self.coordinator.estimated_breakdown
+        return breakdown.total_consumption_kwh_per_week if breakdown else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {"estimate_period": "week", "estimated": True}
+
+
+class EstimatedWeeklyCategorySensor(
+    CoordinatorEntity[EnergyDataUpdateCoordinator], SensorEntity
+):
+    """Energy Buddy's modeled weekly consumption for one category."""
+
+    _attr_has_entity_name = True
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 2
+    _attr_icon = "mdi:chart-pie"
+
+    def __init__(
+        self,
+        coordinator: EnergyDataUpdateCoordinator,
+        category_key: str,
+        category_name: str,
+    ) -> None:
+        super().__init__(coordinator)
+        self._category_key = category_key
+        self._attr_name = f"Estimated weekly {category_name} consumption"
+        self._attr_unique_id = (
+            f"{DOMAIN}_{coordinator.entry.entry_id}_estimated_weekly_category_"
+            f"{category_key}"
+        )
+        self._attr_device_info = _device_info(coordinator)
+
+    @property
+    def _category(self) -> EstimatedConsumptionCategory | None:
+        breakdown = self.coordinator.estimated_breakdown
+        if breakdown is None:
+            return None
+        return next(
+            (
+                category
+                for category in breakdown.categories
+                if category.stable_key == self._category_key
+            ),
+            None,
+        )
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._category is not None
+
+    @property
+    def native_value(self) -> StateType:
+        category = self._category
+        return category.consumption_kwh_per_week if category else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        category = self._category
+        return {
+            "estimate_period": "week",
+            "estimated": True,
+            "share_percent": category.share_percent if category else None,
+        }
