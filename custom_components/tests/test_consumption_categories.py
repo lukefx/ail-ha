@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from homeassistant.components.sensor import SensorStateClass
+
 from custom_components.ail.api_client import parse_appliance_response
 from custom_components.ail.coordinator import EnergyDataUpdateCoordinator
 from custom_components.ail.sensor import (
@@ -46,6 +48,8 @@ def test_estimated_category_sensor_is_clearly_non_authoritative():
         "share_percent": 30.0,
     }
     assert sensor.unique_id == "ail_entry-1_estimated_weekly_category_id-10"
+    assert sensor.device_class is None
+    assert sensor.state_class is SensorStateClass.MEASUREMENT
 
 
 def test_estimated_category_sensor_reads_updated_coordinator_value():
@@ -74,6 +78,8 @@ def test_estimated_total_sensor_exposes_modeled_weekly_total():
         "estimate_period": "week",
         "estimated": True,
     }
+    assert sensor.device_class is None
+    assert sensor.state_class is SensorStateClass.MEASUREMENT
 
 
 async def test_breakdown_refresh_is_throttled_and_keeps_last_good_data(hass):
