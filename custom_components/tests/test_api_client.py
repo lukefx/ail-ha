@@ -1,7 +1,7 @@
 """Tests for the AIL API client."""
 
 from datetime import datetime
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -197,3 +197,55 @@ def test_build_keycloak_login_payload_enables_remember_me():
         "login": "ACCEDI",
         "rememberMe": "on",
     }
+
+
+@pytest.mark.asyncio
+async def test_login_accepts_remembered_keycloak_session():
+    """A silent Keycloak SSO redirect should restore the EnergyBuddy session."""
+    client = AILEnergyClient("user@example.com", "secret")
+    client.session = MagicMock()
+    client._request = AsyncMock(
+        side_effect=[
+            (client.LOGIN_URL, b""),
+            (
+                client.BASE_URL,
+                (
+                    b'<script>aWattgarde.config.token = "token-1";'
+                    b"aWattgarde.Page.SelectedMeterID = 12345;</script>"
+                ),
+            ),
+        ]
+    )
+    client._refresh_session_state = AsyncMock(return_value=False)
+    client._start_oauth_login = AsyncMock(
+        return_value="https://account.ail.ch/auth/realms/ail/protocol/openid-connect/auth"
+    )
+    client._submit_keycloak_credentials = AsyncMock()
+
+    assert await client.login() is True
+    assert client.token == "token-1"
+    assert client.get_meter_id() == "12345"
+    client._submit_keycloak_credentials.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_login_rejects_unrecognized_keycloak_response_as_provider_error():
+    """An unexpected provider page is not proof that credentials are invalid."""
+    client = AILEnergyClient("user@example.com", "secret")
+    client.session = MagicMock()
+    client._request = AsyncMock(
+        side_effect=[
+            (client.LOGIN_URL, b""),
+            (
+                "https://account.ail.ch/auth/realms/ail/unexpected",
+                b"<html><body>Temporarily unavailable</body></html>",
+            ),
+        ]
+    )
+    client._refresh_session_state = AsyncMock(return_value=False)
+    client._start_oauth_login = AsyncMock(
+        return_value="https://account.ail.ch/auth/realms/ail/protocol/openid-connect/auth"
+    )
+
+    with pytest.raises(AILClientError, match="login form"):
+        await client.login()

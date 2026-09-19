@@ -5,7 +5,13 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from custom_components.ail.config_flow import ConfigFlow, InvalidAuth, MFARequired
+from custom_components.ail.api_client import AILClientError
+from custom_components.ail.config_flow import (
+    CannotConnect,
+    ConfigFlow,
+    InvalidAuth,
+    MFARequired,
+)
 from custom_components.ail.const import (
     CONF_MFA_CODE,
     CONF_PASSWORD,
@@ -99,6 +105,27 @@ async def test_test_credentials_raises_mfa_required_without_closing_pending_clie
             )
 
     close_client.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_test_credentials_maps_provider_error_to_cannot_connect(hass):
+    """Provider failures should not be presented as rejected credentials."""
+    flow = ConfigFlow()
+    flow.hass = hass
+
+    with patch(
+        "custom_components.ail.config_flow.AILEnergyClient.login",
+        new=AsyncMock(side_effect=AILClientError("unexpected provider response")),
+    ), patch(
+        "custom_components.ail.config_flow.AILEnergyClient.close",
+        new=AsyncMock(),
+    ) as close_client:
+        with pytest.raises(CannotConnect):
+            await flow._test_credentials(
+                {CONF_USERNAME: "user@example.com", CONF_PASSWORD: "secret"}
+            )
+
+    close_client.assert_awaited_once()
 
 
 @pytest.mark.asyncio

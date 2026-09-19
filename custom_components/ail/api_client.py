@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 import math
@@ -163,42 +162,35 @@ class AILEnergyClient:
             self.session = None
 
     async def login(self) -> bool:
-        try:
-            await self._ensure_session()
+        await self._ensure_session()
 
-            if await self._refresh_session_state():
-                return True
+        if await self._refresh_session_state():
+            return True
 
-            await self._request("GET", self.LOGIN_URL)
+        await self._request("GET", self.LOGIN_URL)
 
-            oauth_redirect = await self._start_oauth_login()
-            if not oauth_redirect:
-                return False
+        oauth_redirect = await self._start_oauth_login()
+        current_url, content = await self._get_keycloak_page(oauth_redirect)
+        if self._store_auth_state_from_content(content):
+            return True
 
-            keycloak_form = await self._get_keycloak_form_action(oauth_redirect)
-            if not keycloak_form:
-                return False
-
-            auth_result = await self._submit_keycloak_credentials(
-                keycloak_form, oauth_redirect
+        keycloak_form = self._extract_keycloak_form_action(content, current_url)
+        if not keycloak_form:
+            raise AILClientError(
+                "AIL returned neither an authenticated page nor a Keycloak login form"
             )
-            if not auth_result:
-                return False
 
-            final_url, content = auth_result
-            if self._update_pending_mfa(content, final_url):
-                return False
+        auth_result = await self._submit_keycloak_credentials(
+            keycloak_form, current_url
+        )
 
-            return self._store_auth_state_from_content(content)
-        except (
-            AILClientError,
-            aiohttp.ClientError,
-            asyncio.TimeoutError,
-            UnicodeError,
-        ):
+        final_url, content = auth_result
+        if self._update_pending_mfa(content, final_url):
             return False
 
-    async def _start_oauth_login(self) -> Optional[str]:
+        return self._store_auth_state_from_content(content)
+
+    async def _start_oauth_login(self) -> str:
         login_payload = {
             "AuthenticationMethod": "OAuth2Authenticator",
             "action_dologin": "Accedi o crea un account AIL",
@@ -212,17 +204,21 @@ class AILEnergyClient:
             allow_redirects=False,
         ) as response:
             if response.status not in (302, 303):
-                return None
+                raise AILClientError(f"AIL OAuth start returned HTTP {response.status}")
 
             location = response.headers.get("Location")
             if not location:
-                return None
+                raise AILClientError("AIL OAuth start omitted the redirect location")
             return validate_ail_url(location, base=self.LOGIN_FORM_URL)
 
-    async def _get_keycloak_form_action(self, auth_url: str) -> Optional[str]:
+    async def _get_keycloak_page(self, auth_url: str) -> tuple[str, str]:
+        """Fetch the identity-provider page after following silent SSO redirects."""
         current_url, body = await self._request("GET", auth_url)
-        content = body.decode("utf-8", "replace")
+        return current_url, body.decode("utf-8", "replace")
 
+    @staticmethod
+    def _extract_keycloak_form_action(content: str, current_url: str) -> Optional[str]:
+        """Extract a credential form action from a Keycloak response."""
         match = re.search(
             r'<form[^>]+id="kc-form-login"[^>]+action="([^"]+)"',
             content,
@@ -235,7 +231,7 @@ class AILEnergyClient:
 
     async def _submit_keycloak_credentials(
         self, form_action: str, referer: str
-    ) -> Optional[tuple[str, str]]:
+    ) -> tuple[str, str]:
         login_payload = self._build_keycloak_login_payload()
 
         final_url, body = await self._request(

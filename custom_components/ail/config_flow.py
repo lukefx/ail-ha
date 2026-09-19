@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import aiohttp
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResult
@@ -10,6 +11,7 @@ from homeassistant.helpers import selector
 from typing import Any
 
 from . import AILEnergyClient
+from .api_client import AILClientError
 from .const import (
     DOMAIN,
     CONF_USERNAME,
@@ -200,7 +202,17 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Test if we can authenticate with the credentials."""
         client = AILEnergyClient(user_input[CONF_USERNAME], user_input[CONF_PASSWORD])
         try:
-            if not await client.login():
+            try:
+                authenticated = await client.login()
+            except (
+                AILClientError,
+                aiohttp.ClientError,
+                TimeoutError,
+                UnicodeError,
+            ) as err:
+                raise CannotConnect from err
+
+            if not authenticated:
                 if client.is_mfa_pending():
                     self._auth_client = client
                     raise MFARequired()
