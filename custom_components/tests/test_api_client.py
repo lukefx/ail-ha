@@ -1,8 +1,95 @@
 """Tests for the AIL API client."""
 
+from datetime import datetime
 from unittest.mock import MagicMock
 
-from custom_components.ail.api_client import AILEnergyClient
+import pytest
+
+from custom_components.ail.api_client import (
+    AILClientError,
+    AILEnergyClient,
+    parse_response,
+    validate_ail_url,
+)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://energybuddy.ail.ch/login",
+        "https://evil.example/login",
+        "https://energybuddy.ail.ch:8443/login",
+        "https://user:password@energybuddy.ail.ch/login",
+        "https://127.0.0.1/login",
+        "//evil.example/login",
+    ],
+)
+def test_rejects_unapproved_redirect_and_form_destinations(url):
+    with pytest.raises(AILClientError):
+        validate_ail_url(url, base="https://account.ail.ch/auth")
+
+
+def test_accepts_only_exact_approved_hosts():
+    assert (
+        validate_ail_url("/auth", base="https://account.ail.ch/login")
+        == "https://account.ail.ch/auth"
+    )
+    with pytest.raises(AILClientError):
+        validate_ail_url("https://account.ail.ch.evil.example/auth")
+
+
+def test_response_is_validated():
+    raw = {
+        "response": [
+            {
+                "from": "2026-01-01T00:00:00+00:00",
+                "to": "2026-01-01T01:00:00+00:00",
+                "day": 2,
+                "night": 0,
+                "isPending": False,
+                "readingsCount": 4,
+            },
+        ]
+    }
+    result = parse_response(raw)
+    assert result.response[0].from_ == datetime.fromisoformat(
+        "2026-01-01T00:00:00+00:00"
+    )
+
+
+@pytest.mark.parametrize("value", [-1, float("nan"), float("inf"), True])
+def test_response_rejects_implausible_energy(value):
+    with pytest.raises(AILClientError):
+        parse_response(
+            {
+                "response": [
+                    {
+                        "from": "2026-01-01T00:00:00+00:00",
+                        "to": "2026-01-01T01:00:00+00:00",
+                        "day": value,
+                        "isPending": False,
+                        "readingsCount": 4,
+                    }
+                ]
+            }
+        )
+
+
+def test_response_accepts_high_but_valid_consumption():
+    result = parse_response(
+        {
+            "response": [
+                {
+                    "from": "2026-01-01T00:00:00+00:00",
+                    "to": "2026-01-01T01:00:00+00:00",
+                    "day": 250,
+                    "isPending": False,
+                    "readingsCount": 4,
+                }
+            ]
+        }
+    )
+    assert result.response[0].day == 250
 
 
 def test_extract_token_from_page_script():
@@ -32,6 +119,7 @@ def test_detect_pending_mfa_from_keycloak_form():
     html = """
     <form id="kc-otp-login-form" action="/auth/realms/ail/login-actions/authenticate">
         <input type="hidden" name="credentialId" value="">
+        <input type="hidden" name="tryAnotherWay" value="on">
         <input type="text" name="otp" autocomplete="one-time-code">
     </form>
     """
@@ -53,7 +141,15 @@ def test_export_session_state_includes_restorable_cookies():
     cookie = MagicMock()
     cookie.key = "AUTH_SESSION_ID"
     cookie.value = "cookie-value"
-    cookie.__getitem__.side_effect = {"domain": ".account.ail.ch", "path": "/"}.get
+    cookie.__getitem__.side_effect = {
+        "domain": ".account.ail.ch",
+        "path": "/",
+        "secure": True,
+        "httponly": True,
+        "samesite": "Lax",
+        "expires": "",
+        "max-age": "",
+    }.get
     client.session.cookie_jar = [cookie]
 
     session_state = client.export_session_state()
@@ -65,11 +161,27 @@ def test_export_session_state_includes_restorable_cookies():
             {
                 "name": "AUTH_SESSION_ID",
                 "value": "cookie-value",
-                "domain": ".account.ail.ch",
+                "domain": "account.ail.ch",
                 "path": "/",
+                "secure": True,
+                "httponly": True,
+                "samesite": "Lax",
+                "expires": "",
+                "max-age": "",
             }
         ],
     }
+
+
+def test_export_drops_unapproved_domain_cookies():
+    client = AILEnergyClient("user@example.com", "secret")
+    client.session = MagicMock()
+    cookie = MagicMock()
+    cookie.key = "stolen"
+    cookie.value = "secret"
+    cookie.__getitem__.side_effect = {"domain": "evil.example"}.get
+    client.session.cookie_jar = [cookie]
+    assert client.export_session_state()["cookies"] == []
 
 
 def test_build_keycloak_login_payload_enables_remember_me():

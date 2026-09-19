@@ -1,16 +1,65 @@
+import asyncio
+import json
 import logging
+import math
 import re
 from http.cookies import SimpleCookie
 from html import unescape
 from urllib.parse import urljoin
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, List
 
 import aiohttp
-from pydantic import BaseModel, Field
+from pydantic import (
+    BaseModel,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from yarl import URL
 
 _LOGGER = logging.getLogger(__name__)
+
+APPROVED_HOSTS = frozenset({"energybuddy.ail.ch", "account.ail.ch"})
+MAX_REDIRECTS = 8
+MAX_HTML_BYTES = 1_000_000
+MAX_JSON_BYTES = 2_000_000
+MAX_RECORDS = 3_000
+HTTP_TIMEOUT = aiohttp.ClientTimeout(
+    total=30, connect=10, sock_connect=10, sock_read=20
+)
+
+
+class AILClientError(Exception):
+    """Safe client error that does not include URLs or credentials."""
+
+
+def validate_ail_url(value: str, *, base: str | None = None) -> str:
+    """Resolve and validate an AIL URL before issuing a request."""
+    try:
+        url = URL(urljoin(base, value) if base else value)
+    except (TypeError, ValueError) as err:
+        raise AILClientError("AIL returned an invalid URL") from err
+
+    if url.scheme != "https" or url.host not in APPROVED_HOSTS:
+        raise AILClientError("AIL returned an unapproved destination")
+    if url.user is not None or url.password is not None or url.port != 443:
+        raise AILClientError("AIL returned unsafe URL authority data")
+
+    return str(url)
+
+
+def _validate_energy(value: Any) -> float:
+    if isinstance(value, bool):
+        raise ValueError("invalid energy value")
+    try:
+        result = float(value or 0.0)
+    except (TypeError, ValueError) as err:
+        raise ValueError("invalid energy value") from err
+    if not math.isfinite(result) or result < 0:
+        raise ValueError("invalid energy value")
+    return result
 
 
 class ConsumptionRecord(BaseModel):
@@ -23,15 +72,50 @@ class ConsumptionRecord(BaseModel):
     readings_count: Optional[int] = Field(None, alias="readingsCount")
     night: Optional[float] = 0.0
 
+    @field_validator("day", "night", mode="before")
+    @classmethod
+    def validate_energy(cls, value: Any) -> float:
+        return _validate_energy(value)
+
+    @field_validator("from_", "to")
+    @classmethod
+    def validate_timestamp(cls, value: datetime) -> datetime:
+        if not 2000 <= value.year <= datetime.now(timezone.utc).year + 1:
+            raise ValueError("invalid timestamp")
+        return value
+
+    @field_validator("readings_count", mode="before")
+    @classmethod
+    def validate_readings_count(cls, value: Any) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError("invalid reading count")
+        return value
+
+    @model_validator(mode="after")
+    def validate_interval(self) -> "ConsumptionRecord":
+        if self.to <= self.from_ or self.to - self.from_ > timedelta(days=1):
+            raise ValueError("invalid time interval")
+        return self
+
 
 class ConsumptionResponse(BaseModel):
     """Model for the complete API response."""
 
-    response: List[ConsumptionRecord]
+    response: List[ConsumptionRecord] = Field(max_length=MAX_RECORDS)
 
     class Config:
         allow_population_by_field_name = True
         json_encoders = {datetime: lambda v: v.isoformat()}
+
+
+def parse_response(data: Any) -> ConsumptionResponse:
+    """Validate an AIL consumption response without leaking its contents."""
+    try:
+        return ConsumptionResponse.model_validate(data)
+    except ValidationError as err:
+        raise AILClientError("AIL returned an invalid response") from err
 
 
 class AILEnergyClient:
@@ -39,6 +123,7 @@ class AILEnergyClient:
     LOGIN_FORM_URL = "https://energybuddy.ail.ch/it/Security/LoginForm"
     BASE_URL = "https://energybuddy.ail.ch/it/base"
     ACCOUNT_URL = "https://account.ail.ch"
+    API_URL = "https://energybuddy.ail.ch/api/v2/service/MeterService/getReadingsByScaleAndTimeRange"
 
     def __init__(
         self,
@@ -62,7 +147,10 @@ class AILEnergyClient:
         self._restore_auth_state()
 
     async def __aenter__(self):
-        self.session = aiohttp.ClientSession(headers=self._headers)
+        self.session = aiohttp.ClientSession(
+            headers=self._headers,
+            timeout=HTTP_TIMEOUT,
+        )
         self._restore_session_cookies()
         return self
 
@@ -75,33 +163,40 @@ class AILEnergyClient:
             self.session = None
 
     async def login(self) -> bool:
-        await self._ensure_session()
+        try:
+            await self._ensure_session()
 
-        if await self._refresh_session_state():
-            return True
+            if await self._refresh_session_state():
+                return True
 
-        async with self.session.get(self.LOGIN_URL, allow_redirects=True):
-            pass
+            await self._request("GET", self.LOGIN_URL)
 
-        oauth_redirect = await self._start_oauth_login()
-        if not oauth_redirect:
+            oauth_redirect = await self._start_oauth_login()
+            if not oauth_redirect:
+                return False
+
+            keycloak_form = await self._get_keycloak_form_action(oauth_redirect)
+            if not keycloak_form:
+                return False
+
+            auth_result = await self._submit_keycloak_credentials(
+                keycloak_form, oauth_redirect
+            )
+            if not auth_result:
+                return False
+
+            final_url, content = auth_result
+            if self._update_pending_mfa(content, final_url):
+                return False
+
+            return self._store_auth_state_from_content(content)
+        except (
+            AILClientError,
+            aiohttp.ClientError,
+            asyncio.TimeoutError,
+            UnicodeError,
+        ):
             return False
-
-        keycloak_form = await self._get_keycloak_form_action(oauth_redirect)
-        if not keycloak_form:
-            return False
-
-        auth_result = await self._submit_keycloak_credentials(
-            keycloak_form, oauth_redirect
-        )
-        if not auth_result:
-            return False
-
-        final_url, content = auth_result
-        if self._update_pending_mfa(content, final_url):
-            return False
-
-        return self._store_auth_state_from_content(content)
 
     async def _start_oauth_login(self) -> Optional[str]:
         login_payload = {
@@ -109,6 +204,7 @@ class AILEnergyClient:
             "action_dologin": "Accedi o crea un account AIL",
         }
 
+        assert self.session is not None
         async with self.session.post(
             self.LOGIN_FORM_URL,
             data=login_payload,
@@ -118,14 +214,14 @@ class AILEnergyClient:
             if response.status not in (302, 303):
                 return None
 
-            return response.headers.get("Location")
+            location = response.headers.get("Location")
+            if not location:
+                return None
+            return validate_ail_url(location, base=self.LOGIN_FORM_URL)
 
     async def _get_keycloak_form_action(self, auth_url: str) -> Optional[str]:
-        async with self.session.get(auth_url, allow_redirects=True) as response:
-            if response.status != 200:
-                return None
-
-            content = await response.text()
+        current_url, body = await self._request("GET", auth_url)
+        content = body.decode("utf-8", "replace")
 
         match = re.search(
             r'<form[^>]+id="kc-form-login"[^>]+action="([^"]+)"',
@@ -135,47 +231,39 @@ class AILEnergyClient:
         if not match:
             return None
 
-        return urljoin(auth_url, unescape(match.group(1)))
+        return validate_ail_url(unescape(match.group(1)), base=current_url)
 
     async def _submit_keycloak_credentials(
         self, form_action: str, referer: str
     ) -> Optional[tuple[str, str]]:
         login_payload = self._build_keycloak_login_payload()
 
-        async with self.session.post(
+        final_url, body = await self._request(
+            "POST",
             form_action,
             data=login_payload,
             headers={
                 "Content-Type": "application/x-www-form-urlencoded",
                 "Referer": referer,
             },
-            allow_redirects=True,
-        ) as response:
-            if response.status != 200:
-                return None
-
-            return str(response.url), await response.text()
+        )
+        return final_url, body.decode("utf-8", "replace")
 
     async def submit_mfa_code(self, code: str) -> bool:
         """Submit the pending MFA step and complete login."""
         if not self._pending_mfa_action or not self._pending_mfa_field:
             raise ValueError("MFA is not pending")
 
-        await self._ensure_session()
-        async with self.session.post(
-            self._pending_mfa_action,
+        final_url, body = await self._request(
+            "POST",
+            validate_ail_url(self._pending_mfa_action),
             data={self._pending_mfa_field: code},
             headers={
                 "Content-Type": "application/x-www-form-urlencoded",
                 "Referer": self._pending_mfa_referer or self._pending_mfa_action,
             },
-            allow_redirects=True,
-        ) as response:
-            if response.status != 200:
-                return False
-
-            final_url = str(response.url)
-            content = await response.text()
+        )
+        content = body.decode("utf-8", "replace")
 
         if self._update_pending_mfa(content, final_url):
             return False
@@ -192,12 +280,20 @@ class AILEnergyClient:
         cookies = []
         if self.session:
             for morsel in self.session.cookie_jar:
+                domain = (morsel["domain"] or "").lstrip(".").lower()
+                if domain not in APPROVED_HOSTS:
+                    continue
                 cookies.append(
                     {
                         "name": morsel.key,
                         "value": morsel.value,
-                        "domain": morsel["domain"] or "",
+                        "domain": domain,
                         "path": morsel["path"] or "/",
+                        "secure": bool(morsel["secure"]),
+                        "httponly": bool(morsel["httponly"]),
+                        "samesite": morsel["samesite"] or "",
+                        "expires": morsel["expires"] or "",
+                        "max-age": morsel["max-age"] or "",
                     }
                 )
 
@@ -210,16 +306,61 @@ class AILEnergyClient:
     async def _ensure_session(self) -> None:
         """Create the HTTP session lazily and restore persisted cookies."""
         if not self.session:
-            self.session = aiohttp.ClientSession(headers=self._headers)
+            self.session = aiohttp.ClientSession(
+                headers=self._headers,
+                timeout=HTTP_TIMEOUT,
+            )
             self._restore_session_cookies()
+
+    async def _request(self, method: str, url: str, **kwargs: Any) -> tuple[str, bytes]:
+        """Issue a bounded request while validating every redirect."""
+        await self._ensure_session()
+        current = validate_ail_url(url)
+
+        for _ in range(MAX_REDIRECTS + 1):
+            assert self.session is not None
+            async with self.session.request(
+                method,
+                current,
+                allow_redirects=False,
+                **kwargs,
+            ) as response:
+                if response.status in {301, 302, 303, 307, 308}:
+                    location = response.headers.get("Location")
+                    if not location:
+                        raise AILClientError("AIL returned an incomplete redirect")
+                    current = validate_ail_url(location, base=current)
+                    if response.status in {301, 302, 303} and method != "GET":
+                        method, kwargs = "GET", {}
+                    continue
+
+                if response.status != 200:
+                    raise AILClientError("AIL request failed")
+
+                limit = (
+                    MAX_JSON_BYTES
+                    if "json" in response.headers.get("Content-Type", "").lower()
+                    else MAX_HTML_BYTES
+                )
+                if (
+                    response.content_length is not None
+                    and response.content_length > limit
+                ):
+                    raise AILClientError("AIL response was too large")
+                body = await response.content.read(limit + 1)
+                if len(body) > limit:
+                    raise AILClientError("AIL response was too large")
+                return validate_ail_url(str(response.url)), body
+
+        raise AILClientError("AIL returned too many redirects")
 
     async def _refresh_session_state(self) -> bool:
         """Try to reuse an existing authenticated session before logging in again."""
-        async with self.session.get(self.BASE_URL, allow_redirects=True) as response:
-            if response.status != 200:
-                return False
-
-            content = await response.text()
+        try:
+            _, body = await self._request("GET", self.BASE_URL)
+        except AILClientError:
+            return False
+        content = body.decode("utf-8", "replace")
 
         return self._store_auth_state_from_content(content)
 
@@ -264,9 +405,11 @@ class AILEnergyClient:
             self._clear_pending_mfa()
             return False
 
-        self._pending_mfa_action = urljoin(current_url, unescape(form_match.group(1)))
+        self._pending_mfa_action = validate_ail_url(
+            unescape(form_match.group(1)), base=current_url
+        )
         self._pending_mfa_field = code_field
-        self._pending_mfa_referer = current_url
+        self._pending_mfa_referer = validate_ail_url(current_url)
         return True
 
     def _clear_pending_mfa(self) -> None:
@@ -286,15 +429,27 @@ class AILEnergyClient:
             return
 
         for cookie_data in self._session_state.get("cookies", []):
-            cookie = SimpleCookie()
-            cookie[cookie_data["name"]] = cookie_data["value"]
-            if cookie_data.get("domain"):
-                cookie[cookie_data["name"]]["domain"] = cookie_data["domain"]
-            if cookie_data.get("path"):
-                cookie[cookie_data["name"]]["path"] = cookie_data["path"]
+            if not isinstance(cookie_data, dict):
+                continue
             domain = (
-                cookie_data.get("domain", "").lstrip(".") or URL(self.BASE_URL).host
+                str(cookie_data.get("domain", "")).lstrip(".").lower()
+                or URL(self.BASE_URL).host
             )
+            if domain not in APPROVED_HOSTS or not cookie_data.get("secure", True):
+                continue
+            name = cookie_data.get("name")
+            value = cookie_data.get("value")
+            if not isinstance(name, str) or not isinstance(value, str):
+                continue
+            cookie = SimpleCookie()
+            cookie[name] = value
+            cookie[name]["domain"] = domain
+            cookie[name]["secure"] = True
+            for attribute in ("path", "expires", "max-age", "samesite"):
+                if cookie_data.get(attribute):
+                    cookie[name][attribute] = cookie_data[attribute]
+            if cookie_data.get("httponly"):
+                cookie[name]["httponly"] = True
             self.session.cookie_jar.update_cookies(
                 cookie, response_url=URL.build(scheme="https", host=domain)
             )
@@ -360,16 +515,14 @@ class AILEnergyClient:
             "fetchPreviousYearData": False,
         }
 
-        params = {"token": self.token}
-        async with self.session.post(
-            "https://energybuddy.ail.ch/api/v2/service/MeterService/getReadingsByScaleAndTimeRange",
-            params=params,
+        _, body = await self._request(
+            "POST",
+            self.API_URL,
+            params={"token": self.token},
             json=payload,
-        ) as response:
-            if response.status == 200:
-                raw_json = await response.json()
-                return ConsumptionResponse(**raw_json)
-            else:
-                raise ConnectionError(
-                    f"Request failed with status code: {response.status}"
-                )
+        )
+        try:
+            raw_json = json.loads(body)
+        except (json.JSONDecodeError, UnicodeDecodeError) as err:
+            raise AILClientError("AIL returned an invalid response") from err
+        return parse_response(raw_json)
