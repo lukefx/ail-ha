@@ -1,11 +1,17 @@
 """Test component setup."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from homeassistant.setup import async_setup_component
+from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers.update_coordinator import UpdateFailed
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.ail.api_client import AILClientError
 from custom_components.ail.const import DOMAIN, ENERGY_CONSUMPTION_KEY
+from custom_components.ail.coordinator import EnergyDataUpdateCoordinator
 
 from custom_components.tests.conftest import auto_enable_custom_integrations  # noqa: F401
 
@@ -105,3 +111,31 @@ async def test_async_unload_entry_closes_client(hass):
         assert await hass.config_entries.async_unload(entry.entry_id)
         await hass.async_block_till_done()
         close_client.assert_awaited()
+
+
+async def test_transient_login_failure_does_not_request_reauthentication(hass):
+    """Provider and transport failures should retry without invalidating auth."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"username": "user@example.com", "password": "secret"},
+    )
+    client = SimpleNamespace(
+        login=AsyncMock(side_effect=AILClientError("unexpected provider response"))
+    )
+    coordinator = EnergyDataUpdateCoordinator(hass, entry, client)
+
+    with pytest.raises(UpdateFailed, match="Unable to authenticate with AIL"):
+        await coordinator._async_update_data()
+
+
+async def test_interactive_login_failure_requests_reauthentication(hass):
+    """An explicit unsuccessful login should retain the reauthentication path."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"username": "user@example.com", "password": "secret"},
+    )
+    client = SimpleNamespace(login=AsyncMock(return_value=False))
+    coordinator = EnergyDataUpdateCoordinator(hass, entry, client)
+
+    with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator._async_update_data()
