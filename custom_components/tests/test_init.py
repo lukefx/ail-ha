@@ -124,7 +124,10 @@ async def test_transient_login_failure_does_not_request_reauthentication(hass):
     )
     coordinator = EnergyDataUpdateCoordinator(hass, entry, client)
 
-    with pytest.raises(UpdateFailed, match="Unable to authenticate with AIL"):
+    with pytest.raises(
+        UpdateFailed,
+        match="AIL authentication check failed: unexpected provider response",
+    ):
         await coordinator._async_update_data()
 
 
