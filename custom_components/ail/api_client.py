@@ -331,7 +331,7 @@ class AILEnergyClient:
                     continue
 
                 if response.status != 200:
-                    raise AILClientError("AIL request failed")
+                    raise AILClientError(f"AIL request returned HTTP {response.status}")
 
                 limit = (
                     MAX_JSON_BYTES
@@ -352,13 +352,25 @@ class AILEnergyClient:
 
     async def _refresh_session_state(self) -> bool:
         """Try to reuse an existing authenticated session before logging in again."""
-        try:
-            _, body = await self._request("GET", self.BASE_URL)
-        except AILClientError:
-            return False
+        final_url, body = await self._request("GET", self.BASE_URL)
         content = body.decode("utf-8", "replace")
 
-        return self._store_auth_state_from_content(content)
+        if self._store_auth_state_from_content(content):
+            return True
+
+        page = URL(final_url)
+        if (
+            page.host == URL(self.LOGIN_URL).host
+            and page.path.rstrip("/").casefold()
+            == URL(self.LOGIN_URL).path.rstrip("/").casefold()
+        ):
+            return False
+        if page.host == URL(
+            self.ACCOUNT_URL
+        ).host and self._extract_keycloak_form_action(content, final_url):
+            return False
+
+        raise AILClientError("AIL returned an unexpected session response")
 
     def _store_auth_state_from_content(self, content: str) -> bool:
         """Extract and persist token/meter from a logged-in page."""

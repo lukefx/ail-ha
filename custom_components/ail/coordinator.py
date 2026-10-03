@@ -215,7 +215,9 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
         """Authenticate while preserving the distinction between auth and outages."""
         try:
             authenticated = await self.api_client.login()
-        except (AILClientError, aiohttp.ClientError, TimeoutError, UnicodeError) as err:
+        except AILClientError as err:
+            raise UpdateFailed(f"AIL authentication check failed: {err}") from err
+        except (aiohttp.ClientError, TimeoutError, UnicodeError) as err:
             raise UpdateFailed("Unable to authenticate with AIL") from err
 
         if not authenticated:

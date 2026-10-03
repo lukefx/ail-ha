@@ -249,3 +249,49 @@ async def test_login_rejects_unrecognized_keycloak_response_as_provider_error():
 
     with pytest.raises(AILClientError, match="login form"):
         await client.login()
+
+
+@pytest.mark.asyncio
+async def test_login_does_not_start_oauth_after_session_check_provider_error():
+    """A temporary website failure must not start interactive login or MFA."""
+    client = AILEnergyClient("user@example.com", "secret")
+    client.session = MagicMock()
+    client._request = AsyncMock(side_effect=AILClientError("AIL request failed"))
+    client._start_oauth_login = AsyncMock()
+
+    with pytest.raises(AILClientError, match="AIL request failed"):
+        await client.login()
+
+    client._start_oauth_login.assert_not_awaited()
+    client._request.assert_awaited_once_with("GET", client.BASE_URL)
+
+
+@pytest.mark.asyncio
+async def test_session_check_reauthenticates_only_on_login_page():
+    """The observed redirect to AIL's login page confirms an expired session."""
+    client = AILEnergyClient("user@example.com", "secret")
+    client.session = MagicMock()
+    client._request = AsyncMock(
+        return_value=(
+            "https://energybuddy.ail.ch/it/Security/login?BackURL=%2Fit%2Fbase",
+            b"<html>Sign in</html>",
+        )
+    )
+
+    assert await client._refresh_session_state() is False
+
+
+@pytest.mark.asyncio
+async def test_session_check_rejects_unexpected_page_without_starting_login():
+    """Maintenance or changed HTML is not proof that credentials expired."""
+    client = AILEnergyClient("user@example.com", "secret")
+    client.session = MagicMock()
+    client._request = AsyncMock(
+        return_value=(client.BASE_URL, b"<html>Maintenance</html>")
+    )
+    client._start_oauth_login = AsyncMock()
+
+    with pytest.raises(AILClientError, match="unexpected session response"):
+        await client.login()
+
+    client._start_oauth_login.assert_not_awaited()
