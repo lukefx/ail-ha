@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -21,7 +22,12 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from .api_client import AILClientError, AILEnergyClient, ConsumptionResponse
+from .api_client import (
+    AILClientError,
+    AILEnergyClient,
+    ConsumptionResponse,
+    EstimatedConsumptionBreakdown,
+)
 from .const import (
     DOMAIN,
     CONF_SESSION_STATE,
@@ -43,6 +49,8 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+BREAKDOWN_UPDATE_INTERVAL = timedelta(days=1)
 
 
 @dataclass
@@ -113,6 +121,8 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
         )
         self.api_client = client
         self.entry = entry
+        self.estimated_breakdown: EstimatedConsumptionBreakdown | None = None
+        self._last_breakdown_refresh: datetime | None = None
 
     async def _async_setup(self) -> None:
         """Set up the coordinator by fetching historical data.
@@ -173,6 +183,7 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
             UpdateFailed: If data cannot be fetched or processed
         """
         await self._async_login()
+        await self._refresh_estimated_breakdown()
 
         end_date = dt_util.now()
         start_date = end_date - timedelta(days=CONSUMPTION_DATA_DAYS_TO_FETCH)
@@ -189,6 +200,43 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
             all_consumption_data.values(), key=lambda c: c.to_date, default=None
         )
         return latest_consumption
+
+    async def _refresh_estimated_breakdown(self) -> None:
+        """Refresh modeled category data at most once per day.
+
+        Category estimates are supplementary. A failure must not make measured
+        consumption unavailable or discard the last valid breakdown.
+        """
+        now = dt_util.utcnow()
+        if (
+            self._last_breakdown_refresh is not None
+            and now - self._last_breakdown_refresh < BREAKDOWN_UPDATE_INTERVAL
+        ):
+            return
+
+        self._last_breakdown_refresh = now
+        try:
+            response = await self.api_client.get_consumption_breakdown()
+        except (
+            AILClientError,
+            aiohttp.ClientError,
+            asyncio.TimeoutError,
+            ValueError,
+        ) as err:
+            _LOGGER.warning(
+                "Unable to refresh estimated consumption categories (%s)",
+                type(err).__name__,
+            )
+            return
+
+        if (
+            response.response.status != "success"
+            or response.response.chart_data is None
+        ):
+            _LOGGER.debug("AIL has no current estimated consumption breakdown")
+            return
+
+        self.estimated_breakdown = response.response.chart_data
 
     async def _fetch_historical_data(self) -> None:
         """Fetch historical data for the past 90 days.

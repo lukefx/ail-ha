@@ -8,6 +8,7 @@ import pytest
 from custom_components.ail.api_client import (
     AILClientError,
     AILEnergyClient,
+    parse_appliance_response,
     parse_response,
     validate_ail_url,
 )
@@ -90,6 +91,110 @@ def test_response_accepts_high_but_valid_consumption():
         }
     )
     assert result.response[0].day == 250
+
+
+def test_appliance_response_parses_estimated_weekly_categories():
+    """Parse the subset of the appliance response used by the integration."""
+    result = parse_appliance_response(
+        {
+            "response": {
+                "status": "success",
+                "chartData": {
+                    "totalConsumptionInkWhPerWeek": 42.5,
+                    "categories": [
+                        {
+                            "name": "Laundry",
+                            "consumptionInkWhPerWeek": 12.75,
+                        },
+                        {
+                            "name": "Lighting",
+                            "consumptionInkWhPerWeek": 6.25,
+                        },
+                    ],
+                },
+                "chartDataLast12Months": None,
+                "data": {
+                    "applianceCategoriesMap": {
+                        "Laundry": 12,
+                        "Lighting": 34,
+                    },
+                    "ignoredProviderField": {"value": "not persisted"},
+                },
+            }
+        }
+    )
+
+    assert result.response.chart_data.total_consumption_kwh_per_week == 42.5
+    assert result.response.chart_data.categories[0].category_id == 12
+    assert result.response.chart_data.categories[0].share_percent == 30.0
+    assert result.response.chart_data.categories[1].category_id == 34
+
+
+@pytest.mark.parametrize(
+    "category",
+    [
+        {"name": "", "consumptionInkWhPerWeek": 1},
+        {"name": "Lighting", "consumptionInkWhPerWeek": -1},
+        {"name": "Lighting", "consumptionInkWhPerWeek": float("inf")},
+        {"name": "Lighting", "consumptionInkWhPerWeek": True},
+    ],
+)
+def test_appliance_response_rejects_invalid_categories(category):
+    with pytest.raises(AILClientError):
+        parse_appliance_response(
+            {
+                "response": {
+                    "status": "success",
+                    "chartData": {
+                        "totalConsumptionInkWhPerWeek": 10,
+                        "categories": [category],
+                    },
+                    "data": {"applianceCategoriesMap": {"Lighting": 1}},
+                }
+            }
+        )
+
+
+def test_appliance_response_allows_unknown_category_without_unstable_index_id():
+    result = parse_appliance_response(
+        {
+            "response": {
+                "status": "success",
+                "chartData": {
+                    "totalConsumptionInkWhPerWeek": 10,
+                    "categories": [
+                        {"name": "New category", "consumptionInkWhPerWeek": 2}
+                    ],
+                },
+                "data": {"applianceCategoriesMap": {}},
+            }
+        }
+    )
+
+    category = result.response.chart_data.categories[0]
+    assert category.category_id is None
+    assert category.stable_key == "name-new-category"
+
+
+async def test_get_consumption_breakdown_uses_appliance_service():
+    client = AILEnergyClient("user@example.com", "secret")
+    client.token = "app-token"
+    client._request = AsyncMock(
+        return_value=(
+            client.APPLIANCE_API_URL,
+            b'{"response":{"status":"success","chartData":null,"data":{}}}',
+        )
+    )
+
+    result = await client.get_consumption_breakdown()
+
+    assert result.response.status == "success"
+    client._request.assert_awaited_once_with(
+        "GET",
+        client.APPLIANCE_API_URL,
+        params={"token": "app-token"},
+        headers={"Accept": "application/json"},
+    )
 
 
 def test_extract_token_from_page_script():
