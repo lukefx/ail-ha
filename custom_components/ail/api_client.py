@@ -4,13 +4,14 @@ import math
 import re
 from http.cookies import SimpleCookie
 from html import unescape
-from urllib.parse import urljoin
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, List, Optional
+from urllib.parse import urljoin
 
 import aiohttp
 from pydantic import (
     BaseModel,
+    ConfigDict,
     Field,
     ValidationError,
     field_validator,
@@ -25,6 +26,7 @@ MAX_REDIRECTS = 8
 MAX_HTML_BYTES = 1_000_000
 MAX_JSON_BYTES = 2_000_000
 MAX_RECORDS = 3_000
+MAX_CATEGORIES = 100
 HTTP_TIMEOUT = aiohttp.ClientTimeout(
     total=30, connect=10, sock_connect=10, sock_read=20
 )
@@ -117,12 +119,157 @@ def parse_response(data: Any) -> ConsumptionResponse:
         raise AILClientError("AIL returned an invalid response") from err
 
 
+class EstimatedConsumptionCategory(BaseModel):
+    """Provider-estimated weekly consumption for one appliance category."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    name: str = Field(min_length=1, max_length=120)
+    consumption_kwh_per_week: float = Field(alias="consumptionInkWhPerWeek")
+    category_id: int | None = Field(default=None, alias="categoryId", ge=0)
+    share_percent: float = Field(default=0.0, ge=0, le=100)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def validate_name(cls, value: Any) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("invalid category name")
+        return value.strip()
+
+    @field_validator("consumption_kwh_per_week", mode="before")
+    @classmethod
+    def validate_consumption(cls, value: Any) -> float:
+        return _validate_energy(value)
+
+    @property
+    def stable_key(self) -> str:
+        """Return a provider-backed key, falling back to the normalized name."""
+        if self.category_id is not None:
+            return f"id-{self.category_id}"
+        normalized = re.sub(r"[^a-z0-9]+", "-", self.name.casefold()).strip("-")
+        return f"name-{normalized or 'unknown'}"
+
+
+class EstimatedConsumptionBreakdown(BaseModel):
+    """Estimated weekly consumption split returned by Energy Buddy."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    total_consumption_kwh_per_week: float = Field(alias="totalConsumptionInkWhPerWeek")
+    categories: tuple[EstimatedConsumptionCategory, ...] = Field(
+        max_length=MAX_CATEGORIES
+    )
+
+    @field_validator("total_consumption_kwh_per_week", mode="before")
+    @classmethod
+    def validate_total_consumption(cls, value: Any) -> float:
+        return _validate_energy(value)
+
+
+class ApplianceData(BaseModel):
+    """Metadata used to give localized categories stable provider IDs."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    appliance_categories_map: dict[str, int] = Field(
+        default_factory=dict, alias="applianceCategoriesMap"
+    )
+
+    @field_validator("appliance_categories_map", mode="before")
+    @classmethod
+    def validate_category_map(cls, value: Any) -> dict[str, int]:
+        if not isinstance(value, dict):
+            raise ValueError("invalid appliance category mapping")
+        if len(value) > MAX_CATEGORIES:
+            raise ValueError("too many appliance categories")
+        if any(
+            not isinstance(name, str)
+            or not name.strip()
+            or isinstance(category_id, bool)
+            or not isinstance(category_id, int)
+            or category_id < 0
+            for name, category_id in value.items()
+        ):
+            raise ValueError("invalid appliance category mapping")
+        return value
+
+
+class ApplianceResponseData(BaseModel):
+    """Subset of the Energy Buddy appliance response used by Home Assistant."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    status: str = Field(min_length=1, max_length=32)
+    chart_data: EstimatedConsumptionBreakdown | None = Field(
+        default=None, alias="chartData"
+    )
+    chart_data_last_12_months: EstimatedConsumptionBreakdown | None = Field(
+        default=None, alias="chartDataLast12Months"
+    )
+    data: ApplianceData = Field(default_factory=ApplianceData)
+
+
+class ApplianceResponse(BaseModel):
+    """Validated Energy Buddy appliance response envelope."""
+
+    model_config = ConfigDict(frozen=True)
+
+    response: ApplianceResponseData
+
+
+def _with_category_metadata(
+    breakdown: EstimatedConsumptionBreakdown | None,
+    category_ids: dict[str, int],
+) -> EstimatedConsumptionBreakdown | None:
+    """Enrich localized category values with stable IDs and calculated shares."""
+    if breakdown is None:
+        return None
+
+    total = breakdown.total_consumption_kwh_per_week
+    categories = []
+    for category in breakdown.categories:
+        category_data = category.model_dump(by_alias=True)
+        category_data.update(
+            {
+                "categoryId": category_ids.get(category.name),
+                "share_percent": (
+                    round(category.consumption_kwh_per_week / total * 100, 2)
+                    if total > 0
+                    else 0.0
+                ),
+            }
+        )
+        categories.append(EstimatedConsumptionCategory.model_validate(category_data))
+    return breakdown.model_copy(update={"categories": tuple(categories)})
+
+
+def parse_appliance_response(data: Any) -> ApplianceResponse:
+    """Validate and enrich an AIL appliance response without retaining extras."""
+    try:
+        result = ApplianceResponse.model_validate(data)
+        category_ids = result.response.data.appliance_categories_map
+        response = result.response.model_copy(
+            update={
+                "chart_data": _with_category_metadata(
+                    result.response.chart_data, category_ids
+                ),
+                "chart_data_last_12_months": _with_category_metadata(
+                    result.response.chart_data_last_12_months, category_ids
+                ),
+            }
+        )
+        return result.model_copy(update={"response": response})
+    except ValidationError as err:
+        raise AILClientError("AIL returned an invalid appliance response") from err
+
+
 class AILEnergyClient:
     LOGIN_URL = "https://energybuddy.ail.ch/it/Security/login?BackURL=%2Fit%2Fbase"
     LOGIN_FORM_URL = "https://energybuddy.ail.ch/it/Security/LoginForm"
     BASE_URL = "https://energybuddy.ail.ch/it/base"
     ACCOUNT_URL = "https://account.ail.ch"
     API_URL = "https://energybuddy.ail.ch/api/v2/service/MeterService/getReadingsByScaleAndTimeRange"
+    APPLIANCE_API_URL = "https://energybuddy.ail.ch/api/v2/service/AppliancesWebService/getApplianceData"
 
     def __init__(
         self,
@@ -534,3 +681,20 @@ class AILEnergyClient:
         except (json.JSONDecodeError, UnicodeDecodeError) as err:
             raise AILClientError("AIL returned an invalid response") from err
         return parse_response(raw_json)
+
+    async def get_consumption_breakdown(self) -> ApplianceResponse:
+        """Fetch Energy Buddy's modeled weekly appliance-category breakdown."""
+        if not self.token:
+            raise ValueError("Not logged in. Call login() first")
+
+        _, body = await self._request(
+            "GET",
+            self.APPLIANCE_API_URL,
+            params={"token": self.token},
+            headers={"Accept": "application/json"},
+        )
+        try:
+            raw_json = json.loads(body)
+        except (json.JSONDecodeError, UnicodeDecodeError) as err:
+            raise AILClientError("AIL returned an invalid appliance response") from err
+        return parse_appliance_response(raw_json)
