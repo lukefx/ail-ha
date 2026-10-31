@@ -1,0 +1,12 @@
+homeassistant:
+  name: AIL Development
+  time_zone: Europe/Zurich
+
+# Frontend includes onboarding and configuration flows.
+frontend:
+recorder:
+
+logger:
+  default: warning
+  logs:
+    custom_components.ail: debug

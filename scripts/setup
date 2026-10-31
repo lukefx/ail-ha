@@ -3,3 +3,7 @@ set -euo pipefail
 
 python -m pip install --upgrade pip
 python -m pip install -r requirements_test.txt
+python -m pip install -r .devcontainer/requirements.txt
+
+# HTTP 200 alone does not exercise the service imports required after UI login.
+python -c 'from homeassistant.helpers.service import _base_components; _base_components()'

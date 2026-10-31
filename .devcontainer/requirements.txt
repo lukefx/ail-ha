@@ -1,0 +1,9 @@
+# Runtime imports used by the frontend's get_services command in HA 2026.2.3.
+# Versions match the corresponding Home Assistant integration manifests.
+hassil==3.5.0
+home-assistant-intents==2026.1.28
+PyTurboJPEG==1.8.0
+mutagen==1.47.0
+ha-ffmpeg==3.2.2
+pymicro-vad==1.0.1
+pyspeex-noise==1.0.2

@@ -63,6 +63,29 @@ Category sensors are provider-generated estimates, not additional meter readings
 use the `measurement` state class and are intentionally kept separate from the
 authoritative cumulative totals used by the Energy dashboard.
 
+## Local development
+
+1. Open this repository in VS Code with Docker running and the Dev Containers extension installed.
+2. Run **Dev Containers: Reopen in Container**. Setup installs Home Assistant and the test dependencies.
+3. In the container terminal, run `scripts/run` and open the forwarded port at [http://localhost:8123](http://localhost:8123).
+4. Complete Home Assistant onboarding with a new local account, then add **AIL: Aziende Industriali di Lugano** under **Settings > Devices & services** to test the AIL login.
+
+The development instance stores its configuration, accounts, database and logs in
+`.devcontainer/ha-config/`, which is ignored by Git and separate from `config/`.
+The AIL integration is linked to the working copy; stop Home Assistant with Ctrl+C
+and run `scripts/run` again after changing Python files. AIL debug logging is enabled
+in the development configuration; logs appear in the terminal and in
+`.devcontainer/ha-config/home-assistant.log`.
+
+Run `python -m pytest -q` inside the container for automated tests. The Home Assistant
+version comes from the test dependency constraints in `requirements_test.txt`.
+Additional frontend runtime dependencies for Home Assistant 2026.2.3 are listed in
+`.devcontainer/requirements.txt`; keep them aligned when upgrading Home Assistant.
+Setup also verifies the service imports used by the UI after login.
+To reset the instance, stop it and delete only `.devcontainer/ha-config/`.
+
+Development environment reference: [Home Assistant contributor documentation](https://contributors.home-assistant.io/core/development/environment/).
+
 ## Support
 
 For issues, feature requests, or contributions, please use the [GitHub Issues](https://github.com/lukefx/ail-ha/issues) page.

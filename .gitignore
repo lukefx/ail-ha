@@ -1,6 +1,7 @@
 .venv/
 .idea/
 config/
+.devcontainer/ha-config/
 .DS_Store
 
 # Byte-compiled / optimized / DLL files

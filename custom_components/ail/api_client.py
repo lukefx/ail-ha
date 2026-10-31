@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import math
@@ -490,7 +491,11 @@ class AILEnergyClient:
                     and response.content_length > limit
                 ):
                     raise AILClientError("AIL response was too large")
-                body = await response.content.read(limit + 1)
+                # read(n) may return only the first available network chunk.
+                try:
+                    body = await response.content.readexactly(limit + 1)
+                except asyncio.IncompleteReadError as err:
+                    body = err.partial
                 if len(body) > limit:
                     raise AILClientError("AIL response was too large")
                 return validate_ail_url(str(response.url)), body

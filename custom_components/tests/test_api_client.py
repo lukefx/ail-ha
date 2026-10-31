@@ -1,8 +1,10 @@
 """Tests for the AIL API client."""
 
+import asyncio
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
+from aiohttp import StreamReader
 import pytest
 
 from custom_components.ail.api_client import (
@@ -400,3 +402,84 @@ async def test_session_check_rejects_unexpected_page_without_starting_login():
         await client.login()
 
     client._start_oauth_login.assert_not_awaited()
+
+
+def _stream_response(url, body, *, fragmented=False):
+    """Use a real aiohttp stream so reads have real network-chunk semantics."""
+    protocol = MagicMock(_reading_paused=False)
+    stream = StreamReader(protocol, limit=2**16)
+    if fragmented:
+        stream.feed_data(body[:1])
+        loop = asyncio.get_running_loop()
+        loop.call_soon(stream.feed_data, body[1:])
+        loop.call_soon(stream.feed_eof)
+    else:
+        stream.feed_data(body)
+        stream.feed_eof()
+    result = MagicMock()
+    result.status = 200
+    result.url = url
+    result.headers = {"Content-Type": "text/html"}
+    result.content_length = None
+    result.content = stream
+    result.__aenter__ = AsyncMock(return_value=result)
+    return result
+
+
+@pytest.mark.parametrize("mfa_required", [True, False])
+async def test_login_reads_fragmented_credential_response(mfa_required):
+    """A partial HTTP body must not turn valid credentials into InvalidAuth."""
+    client = AILEnergyClient("user@example.com", "secret")
+    client._refresh_session_state = AsyncMock(return_value=False)
+    auth_url = "https://account.ail.ch/auth/realms/ail/protocol/openid-connect/auth"
+    form_url = "https://account.ail.ch/auth/realms/ail/login-actions/authenticate"
+    client._start_oauth_login = AsyncMock(return_value=auth_url)
+
+    if mfa_required:
+        final_body = (
+            f'<form id="kc-otp-login-form" action="{form_url}">'
+            '<input name="otp" type="text"></form></body></html>'
+        ).encode()
+    else:
+        final_body = (
+            '<script>aWattgarde.config.token = "token-1";'
+            "aWattgarde.Page.SelectedMeterID = 12345;</script></body></html>"
+        ).encode()
+    client.session = MagicMock()
+    client.session.request.side_effect = [
+        _stream_response(client.LOGIN_URL, b"Login"),
+        _stream_response(
+            auth_url, f'<form id="kc-form-login" action="{form_url}"></form>'.encode()
+        ),
+        _stream_response(
+            form_url, b"<html><head></head><body>" + final_body, fragmented=True
+        ),
+    ]
+
+    assert await client.login() is not mfa_required
+    assert client.is_mfa_pending() is mfa_required
+    if not mfa_required:
+        assert client.token == "token-1"
+        assert client.get_meter_id() == "12345"
+
+
+@pytest.mark.parametrize("content_type", ["text/html", "application/json"])
+@pytest.mark.parametrize("size", [16, 17])
+async def test_request_enforces_size_limit_on_fragmented_body(
+    monkeypatch, content_type, size
+):
+    """Read through EOF but reject oversized bodies even without Content-Length."""
+    monkeypatch.setattr("custom_components.ail.api_client.MAX_HTML_BYTES", 16)
+    monkeypatch.setattr("custom_components.ail.api_client.MAX_JSON_BYTES", 16)
+    client = AILEnergyClient("user@example.com", "secret")
+    body = b"x" * size
+    response = _stream_response(client.BASE_URL, body, fragmented=True)
+    response.headers["Content-Type"] = content_type
+    client.session = MagicMock()
+    client.session.request.return_value = response
+
+    if size > 16:
+        with pytest.raises(AILClientError, match="too large"):
+            await client._request("GET", client.BASE_URL)
+    else:
+        assert await client._request("GET", client.BASE_URL) == (client.BASE_URL, body)

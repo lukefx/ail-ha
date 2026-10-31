@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+config_dir="$project_dir/.devcontainer/ha-config"
+
+mkdir -p "$config_dir/custom_components"
+if [[ ! -f "$config_dir/configuration.yaml" ]]; then
+    cp "$project_dir/.devcontainer/configuration.yaml" "$config_dir/configuration.yaml"
+fi
+ln -sfn "$project_dir/custom_components/ail" "$config_dir/custom_components/ail"
+
+exec hass --config "$config_dir" "$@"
