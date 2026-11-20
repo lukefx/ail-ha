@@ -40,7 +40,8 @@
       "invalid_mfa_code": "The verification code was rejected. Request a new code and try again.",
       "mfa_session_expired": "The verification session expired. A new code is required.",
       "unknown": "Unexpected error occurred. Please check the logs for more details.",
-      "invalid_price": "Invalid price value. Please enter a valid number."
+      "invalid_price": "Invalid price value. Please enter a valid number.",
+      "wrong_account": "That AIL account is linked to a different meter. Use the account this integration was created with, or add a separate integration entry for the other meter."
     },
     "abort": {
       "already_configured": "This account is already configured",

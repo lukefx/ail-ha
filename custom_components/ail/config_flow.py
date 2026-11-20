@@ -193,6 +193,15 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="entry_not_found")
 
         auth_data: dict[str, Any] = self.auth_data or {}
+        if not self._session_serves_entry(entry, auth_data):
+            # Entities and long-term statistics are bound to the meter this
+            # entry was created with: another account must not take it over.
+            await self._close_auth_client()
+            auth_data.pop(CONF_SESSION_STATE, None)
+            return await self.async_step_reauth_credentials(
+                errors={"base": "wrong_account"}
+            )
+
         data = {
             **entry.data,
             CONF_USERNAME: auth_data[CONF_USERNAME],
@@ -206,6 +215,18 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data=data,
             reason="reauth_successful",
         )
+
+    @staticmethod
+    def _session_serves_entry(
+        entry: config_entries.ConfigEntry, auth_data: dict[str, Any]
+    ) -> bool:
+        """Return False when the renewed session belongs to another meter."""
+        stored = (entry.data.get(CONF_SESSION_STATE) or {}).get("meter_id")
+        refreshed = (auth_data.get(CONF_SESSION_STATE) or {}).get("meter_id")
+        if not stored or not refreshed:
+            # Nothing to compare against (legacy entry, unscraped page).
+            return True
+        return str(stored) == str(refreshed)
 
     async def async_step_mfa(
         self, user_input: dict[str, Any] | None = None
@@ -240,6 +261,10 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     if not await self._auth_client.submit_mfa_code(
                         user_input[CONF_MFA_CODE]
                     ):
+                        # A challenge that vanished server-side is an expiry,
+                        # not a wrong code: restart instead of asking again.
+                        if not self._auth_client.is_mfa_pending():
+                            raise MfaSessionExpired()
                         # This specifically indicates a bad MFA code.
                         raise InvalidAuth()
 
@@ -249,6 +274,20 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     await self._close_auth_client()
                     if self._reauth_entry is not None:
                         return await self._async_finish_reauth()
+                    return await self.async_step_tariff()
+            except MfaSessionExpired:
+                await self._close_auth_client()
+                if self._reauth_entry is not None:
+                    return await self._async_reauth_try_silent()
+                # Adding an entry: re-ask Keycloak for a fresh challenge.
+                try:
+                    await self._test_credentials(self.auth_data)
+                except MFARequired:
+                    return await self.async_step_mfa()
+                except (InvalidAuth, CannotConnect):
+                    self.auth_data = None
+                    return await self.async_step_user()
+                else:
                     return await self.async_step_tariff()
             except InvalidAuth:
                 errors["base"] = "invalid_mfa_code"
@@ -364,3 +403,7 @@ class InvalidAuth(HomeAssistantError):
 
 class MFARequired(HomeAssistantError):
     """Error to indicate MFA is required to complete login."""
+
+
+class MfaSessionExpired(HomeAssistantError):
+    """Error to indicate the pending MFA challenge is gone server-side."""

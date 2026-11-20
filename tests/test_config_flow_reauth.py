@@ -42,13 +42,13 @@ class FakeClient:
         mfa_pending: bool = False,
         session_state: dict[str, Any] | None = None,
         fail: Exception | None = None,
-        init_kwargs: dict[str, Any] | None = None,
+        expire_on_submit: bool = False,
     ) -> None:
         self.authenticated = authenticated
         self.mfa_pending = mfa_pending
         self.session_state = session_state or FRESH_SESSION
         self.fail = fail
-        self.init_kwargs = init_kwargs
+        self.expire_on_submit = expire_on_submit
         self.closed = False
         self.login_calls = 0
 
@@ -62,6 +62,11 @@ class FakeClient:
         return self.mfa_pending
 
     async def submit_mfa_code(self, code: str) -> bool:
+        if self.expire_on_submit:
+            # Keycloak dropped the challenge: the client clears its pending
+            # state and reports failure, exactly like a refetch of the page.
+            self.mfa_pending = False
+            return False
         return code == "123456"
 
     def export_session_state(self) -> dict[str, Any]:
@@ -205,3 +210,41 @@ async def test_reauth_reports_transport_failure(hass):
     assert result["step_id"] == "reauth_credentials"
     assert result["errors"] == {"base": "cannot_connect"}
     assert entry.data[CONF_SESSION_STATE] == ENTRY_DATA[CONF_SESSION_STATE]
+
+
+async def test_reauth_rejects_another_meter_account(hass, _stub_reload):
+    """A session for a different meter must not take over the entry."""
+    entry = await _add_entry(hass)
+    other_meter = {"cookies": [], "token": "fresh", "meter_id": "9999"}
+    client = FakeClient(session_state=other_meter)
+
+    with patch(PATCH_CLIENT, return_value=client):
+        result = await _start_reauth(hass, entry)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reauth_credentials"
+    assert result["errors"] == {"base": "wrong_account"}
+    assert entry.data[CONF_SESSION_STATE] == ENTRY_DATA[CONF_SESSION_STATE]
+    _stub_reload.assert_not_awaited()
+
+
+async def test_reauth_restarts_when_the_challenge_expired(hass, _stub_reload):
+    """An expired Keycloak challenge restarts the login, not the code form."""
+    entry = await _add_entry(hass)
+    expiring = FakeClient(authenticated=False, mfa_pending=True, expire_on_submit=True)
+    recovered = FakeClient()
+
+    with patch(PATCH_CLIENT, side_effect=[expiring, recovered]) as client_cls:
+        result = await _start_reauth(hass, entry)
+        assert result["step_id"] == "mfa"
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"mfa_code": "123456"}
+        )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reauth_successful"
+    # Restarted: a second client logged in without another code being typed.
+    assert client_cls.call_count == 2
+    assert recovered.login_calls == 1
+    assert entry.data[CONF_SESSION_STATE] == FRESH_SESSION
