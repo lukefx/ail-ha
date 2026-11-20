@@ -24,17 +24,28 @@
           "peak_price": "Peak (day) rate [CHF/kWh]",
           "off_peak_price": "Off-peak (night) rate [CHF/kWh]"
         }
+      },
+      "reauth_credentials": {
+        "title": "Reauthenticate with AIL",
+        "description": "The stored AIL credentials were rejected. Enter the account credentials again; AIL will e-mail a verification code next.",
+        "data": {
+          "username": "Username",
+          "password": "Password"
+        }
       }
     },
     "error": {
       "cannot_connect": "Failed to connect to the service. Please check your internet connection and try again.",
       "invalid_auth": "Invalid authentication credentials. Please check your username and password.",
       "invalid_mfa_code": "The verification code was rejected. Request a new code and try again.",
+      "mfa_session_expired": "The verification session expired. A new code is required.",
       "unknown": "Unexpected error occurred. Please check the logs for more details.",
       "invalid_price": "Invalid price value. Please enter a valid number."
     },
     "abort": {
-      "already_configured": "This account is already configured"
+      "already_configured": "This account is already configured",
+      "entry_not_found": "The AIL configuration entry no longer exists.",
+      "reauth_successful": "AIL authentication renewed."
     }
   }
 }

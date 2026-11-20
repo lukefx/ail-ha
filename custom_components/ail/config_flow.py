@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import aiohttp
 import voluptuous as vol
+from typing import Any
+from collections.abc import Mapping
+
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import selector
-from typing import Any
 
 from . import AILEnergyClient
 from .api_client import AILClientError
@@ -35,6 +37,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Initialize the config flow."""
         self.auth_data = None
         self._auth_client = None
+        self._reauth_entry: config_entries.ConfigEntry | None = None
 
     async def async_step_user(
         self, user_input: dict[str, any] | None = None
@@ -93,6 +96,117 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    # ------------------------------------------------------------------
+    # Reauthentication
+    # ------------------------------------------------------------------
+
+    async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> FlowResult:
+        """Recover an existing entry whose stored AIL session expired.
+
+        Home Assistant starts this flow when the coordinator raises
+        ConfigEntryAuthFailed. Recovery is attempted silently first: the stored
+        cookies normally still yield a Keycloak session, and only a genuine SSO
+        expiry needs the user.
+        """
+        entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+        if entry is None:
+            return self.async_abort(reason="entry_not_found")
+
+        self._reauth_entry = entry
+        # Keep credentials and tariff settings; only the session state is new.
+        self.auth_data = dict(entry.data)
+        await self._close_auth_client()
+        return await self._async_reauth_try_silent()
+
+    async def _async_reauth_try_silent(self) -> FlowResult:
+        """Renew the session without user input, falling back to a form."""
+        auth_data: dict[str, Any] = self.auth_data or {}
+        self.auth_data = auth_data
+        try:
+            await self._test_credentials(auth_data)
+        except MFARequired:
+            # Keycloak wants an email code: ask for the code and nothing else.
+            return await self.async_step_mfa()
+        except InvalidAuth:
+            # The stored password is no longer accepted.
+            return await self.async_step_reauth_credentials()
+        except CannotConnect:
+            return await self.async_step_reauth_credentials(
+                errors={"base": "cannot_connect"}
+            )
+        return await self._async_finish_reauth()
+
+    async def async_step_reauth_credentials(
+        self,
+        user_input: dict[str, Any] | None = None,
+        errors: dict[str, str] | None = None,
+    ) -> FlowResult:
+        """Ask for credentials when the stored ones are rejected."""
+        errors = dict(errors or {})
+        auth_data: dict[str, Any] = self.auth_data or {}
+        self.auth_data = auth_data
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_USERNAME, default=auth_data.get(CONF_USERNAME, "")
+                ): selector.TextSelector(
+                    selector.TextSelectorConfig(
+                        type=selector.TextSelectorType.TEXT,
+                    ),
+                ),
+                vol.Required(CONF_PASSWORD): selector.TextSelector(
+                    selector.TextSelectorConfig(
+                        type=selector.TextSelectorType.PASSWORD,
+                    ),
+                ),
+            }
+        )
+
+        if user_input is not None:
+            await self._close_auth_client()
+            # Cookies belong to the previous identifier: never reuse them.
+            auth_data.pop(CONF_SESSION_STATE, None)
+            auth_data.update(user_input)
+            try:
+                await self._test_credentials(auth_data)
+            except MFARequired:
+                return await self.async_step_mfa()
+            except InvalidAuth:
+                errors["base"] = "invalid_auth"
+            except CannotConnect:
+                errors["base"] = "cannot_connect"
+            except Exception:  # pylint: disable=broad-except
+                errors["base"] = "unknown"
+            else:
+                return await self._async_finish_reauth()
+
+        return self.async_show_form(
+            step_id="reauth_credentials",
+            data_schema=schema,
+            errors=errors,
+        )
+
+    async def _async_finish_reauth(self) -> FlowResult:
+        """Persist the renewed session state and reload the entry."""
+        entry = self._reauth_entry
+        if entry is None:  # pragma: no cover - guarded by async_step_reauth
+            return self.async_abort(reason="entry_not_found")
+
+        auth_data: dict[str, Any] = self.auth_data or {}
+        data = {
+            **entry.data,
+            CONF_USERNAME: auth_data[CONF_USERNAME],
+            CONF_PASSWORD: auth_data[CONF_PASSWORD],
+            CONF_SESSION_STATE: auth_data[CONF_SESSION_STATE],
+        }
+        await self._close_auth_client()
+        self._reauth_entry = None
+        return self.async_update_reload_and_abort(
+            entry,
+            data=data,
+            reason="reauth_successful",
+        )
+
     async def async_step_mfa(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
@@ -113,9 +227,13 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 # If there is no active MFA session, treat this as an expired
                 # or missing MFA state rather than an invalid MFA code.
                 if not self._auth_client or not self._auth_client.is_mfa_pending():
+                    # The Keycloak form is short lived. Restart the login so the
+                    # user gets a fresh code instead of posting into a dead one.
+                    await self._close_auth_client()
+                    if self._reauth_entry is not None:
+                        return await self._async_reauth_try_silent()
                     # Clear any stale authentication state so the user can
                     # restart the authentication flow cleanly.
-                    await self._close_auth_client()
                     self.auth_data = None
                     errors["base"] = "mfa_session_expired"
                 else:
@@ -129,12 +247,15 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         self._auth_client.export_session_state()
                     )
                     await self._close_auth_client()
+                    if self._reauth_entry is not None:
+                        return await self._async_finish_reauth()
                     return await self.async_step_tariff()
             except InvalidAuth:
                 errors["base"] = "invalid_mfa_code"
             except Exception:  # pylint: disable=broad-except
                 await self._close_auth_client()
-                self.auth_data = None
+                if self._reauth_entry is None:
+                    self.auth_data = None
                 errors["base"] = "unknown"
 
         return self.async_show_form(
@@ -200,7 +321,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def _test_credentials(self, user_input):
         """Test if we can authenticate with the credentials."""
-        client = AILEnergyClient(user_input[CONF_USERNAME], user_input[CONF_PASSWORD])
+        client = AILEnergyClient(
+            user_input[CONF_USERNAME],
+            user_input[CONF_PASSWORD],
+            session_state=user_input.get(CONF_SESSION_STATE),
+        )
         try:
             try:
                 authenticated = await client.login()
