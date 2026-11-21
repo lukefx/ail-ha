@@ -1,6 +1,7 @@
 """Test component setup."""
 
 from types import SimpleNamespace
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -151,3 +152,31 @@ async def test_interactive_login_failure_requests_reauthentication(hass):
 
     with pytest.raises(ConfigEntryAuthFailed):
         await coordinator._async_update_data()
+
+
+async def test_session_checks_do_not_increase_consumption_polling(hass):
+    """Check auth every 15 minutes but fetch consumption only once per hour."""
+    entry = MockConfigEntry(domain=DOMAIN, data={})
+    coordinator = EnergyDataUpdateCoordinator(hass, entry, SimpleNamespace())
+    coordinator._async_login = AsyncMock()
+    coordinator._refresh_estimated_breakdown = AsyncMock()
+    start = datetime(2026, 11, 21, tzinfo=timezone.utc)
+    reading = SimpleNamespace(to_date=start)
+    coordinator._fetch_chunked_data = AsyncMock(return_value={start: reading})
+    coordinator._insert_statistics = AsyncMock()
+
+    assert coordinator.update_interval == timedelta(minutes=15)
+    for minute in (0, 15, 30, 45, 60):
+        with patch(
+            "custom_components.ail.coordinator.dt_util.utcnow",
+            return_value=start + timedelta(minutes=minute),
+        ):
+            result = await coordinator._async_update_data()
+            assert result is reading
+            # DataUpdateCoordinator normally stores this return value itself.
+            coordinator.data = result
+
+    assert coordinator._async_login.await_count == 5
+    assert coordinator._fetch_chunked_data.await_count == 2
+    assert coordinator._refresh_estimated_breakdown.await_count == 2
+    assert coordinator._insert_statistics.await_count == 2
