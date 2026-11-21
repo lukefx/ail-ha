@@ -27,6 +27,7 @@ from .api_client import (
     AILEnergyClient,
     ConsumptionResponse,
     EstimatedConsumptionBreakdown,
+    SSO_REFRESH_INTERVAL,
 )
 from .const import (
     DOMAIN,
@@ -116,13 +117,13 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
             hass,
             _LOGGER,
             name=DOMAIN,
-            # Ping the api every hour, so we provide the data as sensor, and we try to add statistic
-            update_interval=timedelta(hours=DEFAULT_UPDATE_INTERVAL_HOUR),
+            update_interval=SSO_REFRESH_INTERVAL,
         )
         self.api_client = client
         self.entry = entry
         self.estimated_breakdown: EstimatedConsumptionBreakdown | None = None
         self._last_breakdown_refresh: datetime | None = None
+        self._last_consumption_refresh: datetime | None = None
 
     async def _async_setup(self) -> None:
         """Set up the coordinator by fetching historical data.
@@ -183,6 +184,13 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
             UpdateFailed: If data cannot be fetched or processed
         """
         await self._async_login()
+        now = dt_util.utcnow()
+        if (
+            self._last_consumption_refresh is not None
+            and now - self._last_consumption_refresh
+            < timedelta(hours=DEFAULT_UPDATE_INTERVAL_HOUR)
+        ):
+            return self.data
         await self._refresh_estimated_breakdown()
 
         end_date = dt_util.now()
@@ -190,10 +198,12 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
         all_consumption_data = await self._fetch_chunked_data(start_date, end_date)
 
         if not all_consumption_data:
+            self._last_consumption_refresh = now
             _LOGGER.warning("No consumption data received from API")
             return None
 
         await self._insert_statistics(all_consumption_data)
+        self._last_consumption_refresh = now
 
         # Return the latest consumption if available
         latest_consumption = max(

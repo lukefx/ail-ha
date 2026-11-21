@@ -7,6 +7,7 @@ from http.cookies import SimpleCookie
 from html import unescape
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from time import monotonic
 from urllib.parse import urljoin
 
 import aiohttp
@@ -31,6 +32,8 @@ MAX_CATEGORIES = 100
 HTTP_TIMEOUT = aiohttp.ClientTimeout(
     total=30, connect=10, sock_connect=10, sock_read=20
 )
+SSO_REFRESH_INTERVAL = timedelta(minutes=15)
+OAUTH_CALLBACK_URL = "https://energybuddy.ail.ch/oauth2/login"
 
 
 class AILClientError(Exception):
@@ -287,6 +290,7 @@ class AILEnergyClient:
         self._pending_mfa_action = None
         self._pending_mfa_field = None
         self._pending_mfa_referer = None
+        self._last_sso_refresh: float | None = None
         self._headers = {
             "Cache-Control": "no-cache, max-age=0, must-revalidate",
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
@@ -313,6 +317,29 @@ class AILEnergyClient:
         await self._ensure_session()
 
         if await self._refresh_session_state():
+            now = monotonic()
+            if (
+                self._last_sso_refresh is None
+                or now - self._last_sso_refresh >= SSO_REFRESH_INTERVAL.total_seconds()
+            ):
+                # Throttle attempts too: an outage must not cause a login loop.
+                self._last_sso_refresh = now
+                try:
+                    renewed = await self.refresh_sso_session()
+                except (
+                    AILClientError,
+                    aiohttp.ClientError,
+                    TimeoutError,
+                    UnicodeError,
+                ):
+                    _LOGGER.debug(
+                        "AIL silent SSO renewal failed; retaining the active application session"
+                    )
+                else:
+                    _LOGGER.debug(
+                        "AIL silent SSO renewal %s",
+                        "succeeded" if renewed else "requires interaction",
+                    )
             return True
 
         await self._request("GET", self.LOGIN_URL)
@@ -337,6 +364,35 @@ class AILEnergyClient:
             return False
 
         return self._store_auth_state_from_content(content)
+
+    async def refresh_sso_session(self) -> bool:
+        """Renew through EnergyBuddy's callback without submitting credentials.
+
+        EnergyBuddy owns the OAuth client credentials and exchanges the code.
+        This only attempts to extend the SSO idle timeout, not its maximum age.
+        """
+        await self._request("GET", self.LOGIN_URL)
+        auth_url = URL(await self._start_oauth_login()).update_query(prompt="none")
+        final_url, body = await self._request(
+            "GET", str(auth_url), stop_on_oauth_error=True
+        )
+        error = URL(final_url).query.get("error")
+        if error:
+            if error in {
+                "login_required",
+                "interaction_required",
+                "consent_required",
+                "account_selection_required",
+            }:
+                return False
+            raise AILClientError("AIL rejected silent SSO renewal")
+        content = body.decode("utf-8", "replace")
+        if self._store_auth_state_from_content(content):
+            return True
+        if URL(final_url).host == URL(self.ACCOUNT_URL).host:
+            # Never submit a credential/MFA form during a background renewal.
+            return False
+        raise AILClientError("AIL returned an unexpected silent SSO response")
 
     async def _start_oauth_login(self) -> str:
         login_payload = {
@@ -456,7 +512,9 @@ class AILEnergyClient:
             )
             self._restore_session_cookies()
 
-    async def _request(self, method: str, url: str, **kwargs: Any) -> tuple[str, bytes]:
+    async def _request(
+        self, method: str, url: str, *, stop_on_oauth_error: bool = False, **kwargs: Any
+    ) -> tuple[str, bytes]:
         """Issue a bounded request while validating every redirect."""
         await self._ensure_session()
         current = validate_ail_url(url)
@@ -474,6 +532,16 @@ class AILEnergyClient:
                     if not location:
                         raise AILClientError("AIL returned an incomplete redirect")
                     current = validate_ail_url(location, base=current)
+                    callback = URL(current)
+                    if (
+                        stop_on_oauth_error
+                        and callback.with_query(None).with_fragment(None)
+                        == URL(OAUTH_CALLBACK_URL)
+                        and "error" in callback.query
+                    ):
+                        # Do not send an expected prompt=none error into the
+                        # EnergyBuddy callback, which expects a successful code.
+                        return current, b""
                     if response.status in {301, 302, 303} and method != "GET":
                         method, kwargs = "GET", {}
                     continue

@@ -65,6 +65,30 @@ authoritative cumulative totals used by the Energy dashboard.
 
 ## Local development
 
+### Experimental proactive SSO renewal
+
+The `codex/test-sso-session-refresh` branch checks the application session every
+15 minutes while retaining hourly consumption downloads and daily category
+downloads. With an active EnergyBuddy session, it also attempts an OAuth login
+using the existing AIL cookies and `prompt=none`, at most once every 15 minutes.
+EnergyBuddy handles the successful callback and exchanges the authorization
+code on its server. The integration then extracts the updated application token
+and persists the current cookies as usual; it does not acquire an OAuth refresh
+token or require the EnergyBuddy client secret.
+
+Background renewal never submits a password or MFA code. When Keycloak requires
+interaction, the attempt stops before sending the OAuth error to EnergyBuddy's
+callback. The existing application session remains usable until it expires;
+normal login and Home Assistant reauthentication then apply. Temporary renewal
+errors are logged at debug level and do not invalidate an active application
+session. Debug logs also report successful renewal or required interaction.
+
+This experiment is intended to test the SSO idle timeout. It cannot extend
+AIL's maximum session lifetime or override an MFA policy. Effectiveness and
+EnergyBuddy's handling of `prompt=none` still need an authenticated live test.
+
+### Development setup
+
 1. Open this repository in VS Code with Docker running and the Dev Containers extension installed.
 2. Run **Dev Containers: Reopen in Container**. Setup installs Home Assistant and the test dependencies.
 3. In the container terminal, run `scripts/run` and open the forwarded port at [http://localhost:8123](http://localhost:8123).

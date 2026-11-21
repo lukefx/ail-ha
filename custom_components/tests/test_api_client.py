@@ -2,7 +2,7 @@
 
 import asyncio
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from aiohttp import StreamReader
 import pytest
@@ -14,6 +14,104 @@ from custom_components.ail.api_client import (
     parse_response,
     validate_ail_url,
 )
+
+
+@pytest.mark.asyncio
+async def test_silent_sso_follows_successful_callback_and_updates_auth():
+    """The EnergyBuddy callback must consume the code and return fresh state."""
+    client = AILEnergyClient("user@example.com", "secret")
+    client.session = MagicMock()
+    client._start_oauth_login = AsyncMock(
+        return_value=(
+            "https://account.ail.ch/auth/realms/ail/protocol/openid-connect/auth?state=test"
+        )
+    )
+    redirect = _stream_response(client.ACCOUNT_URL, b"")
+    redirect.status = 302
+    redirect.headers = {
+        "Location": "https://energybuddy.ail.ch/oauth2/login?code=test&state=test"
+    }
+    client.session.request.side_effect = [
+        _stream_response(client.LOGIN_URL, b"Login"),
+        redirect,
+        _stream_response(
+            client.BASE_URL,
+            (
+                b'aWattgarde.config.token = "renewed";'
+                b"aWattgarde.Page.SelectedMeterID = 42;"
+            ),
+        ),
+    ]
+
+    assert await client.refresh_sso_session() is True
+    requests = client.session.request.call_args_list
+    assert "prompt=none" in requests[1].args[1]
+    assert requests[2].args[1].startswith("https://energybuddy.ail.ch/oauth2/login?")
+    assert client.token == "renewed"
+    assert client.get_meter_id() == "42"
+    assert all(call.args[0] == "GET" for call in requests)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error", ["login_required", "interaction_required", "consent_required"]
+)
+async def test_silent_sso_stops_before_error_callback_without_losing_auth(error):
+    """An expired SSO must not submit credentials or invalidate the app token."""
+    client = AILEnergyClient(
+        "user@example.com", "secret", session_state={"token": "active"}
+    )
+    client.session = MagicMock()
+    client._start_oauth_login = AsyncMock(return_value=client.ACCOUNT_URL + "/auth")
+    redirect = _stream_response(client.ACCOUNT_URL, b"")
+    redirect.status = 302
+    redirect.headers = {
+        "Location": f"https://energybuddy.ail.ch/oauth2/login?error={error}"
+    }
+    client.session.request.side_effect = [
+        _stream_response(client.LOGIN_URL, b"Login"),
+        redirect,
+    ]
+
+    assert await client.refresh_sso_session() is False
+    assert client.token == "active"
+    assert not client.is_mfa_pending()
+    assert client.session.request.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_silent_sso_never_submits_unexpected_login_form():
+    client = AILEnergyClient("user@example.com", "secret")
+    client._request = AsyncMock(
+        side_effect=[
+            (client.LOGIN_URL, b""),
+            (client.ACCOUNT_URL, b'<form id="kc-form-login" action="/login"></form>'),
+        ]
+    )
+    client._start_oauth_login = AsyncMock(return_value=client.ACCOUNT_URL)
+    client._submit_keycloak_credentials = AsyncMock()
+    assert await client.refresh_sso_session() is False
+    client._submit_keycloak_credentials.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("renewal", [True, False, AILClientError("outage")])
+async def test_login_keeps_live_session_and_throttles_sso_attempts(renewal):
+    client = AILEnergyClient("user@example.com", "secret")
+    client._ensure_session = AsyncMock()
+    client._refresh_session_state = AsyncMock(return_value=True)
+    client.refresh_sso_session = AsyncMock(
+        side_effect=renewal if isinstance(renewal, Exception) else None,
+        return_value=renewal,
+    )
+    client._submit_keycloak_credentials = AsyncMock()
+    with patch("custom_components.ail.api_client.monotonic", side_effect=[0, 899, 900]):
+        assert await client.login() is True
+        assert await client.login() is True
+        assert client.refresh_sso_session.await_count == 1
+        assert await client.login() is True
+    assert client.refresh_sso_session.await_count == 2
+    client._submit_keycloak_credentials.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
