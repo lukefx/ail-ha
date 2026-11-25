@@ -287,6 +287,7 @@ class AILEnergyClient:
         self._pending_mfa_action = None
         self._pending_mfa_field = None
         self._pending_mfa_referer = None
+        self._authorize_url: Optional[str] = None
         self._headers = {
             "Cache-Control": "no-cache, max-age=0, must-revalidate",
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
@@ -318,6 +319,7 @@ class AILEnergyClient:
         await self._request("GET", self.LOGIN_URL)
 
         oauth_redirect = await self._start_oauth_login()
+        self._authorize_url = oauth_redirect
         current_url, content = await self._get_keycloak_page(oauth_redirect)
         if self._store_auth_state_from_content(content):
             return True
@@ -337,6 +339,41 @@ class AILEnergyClient:
             return False
 
         return self._store_auth_state_from_content(content)
+
+    async def keepalive(self) -> Optional[bool]:
+        """Touch the identity-provider session so it does not idle out.
+
+        The data poll only renews the Energy Buddy session; Keycloak is never
+        contacted between logins, so its session expires long before the portal
+        session does and every recovery would need the e-mailed code.
+
+        Returns:
+            True when the session is still accepted, False when it has already
+            expired, or None when there is no session to keep warm.
+        """
+        if not self.token:
+            return None
+
+        await self._ensure_session()
+
+        if self._authorize_url is None:
+            # A client restored from a live session never ran login(), so the
+            # authorize URL was never cached. Fetching it costs the same request
+            # a full login would make anyway.
+            self._authorize_url = await self._start_oauth_login()
+
+        probe_url = str(URL(self._authorize_url).update_query({"prompt": "none"}))
+
+        assert self.session is not None
+        try:
+            async with self.session.get(probe_url, allow_redirects=False) as response:
+                location = response.headers.get("Location", "")
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise AILClientError("AIL SSO keepalive request failed") from err
+
+        if "error=login_required" in location:
+            return False
+        return "code=" in location
 
     async def _start_oauth_login(self) -> str:
         login_payload = {

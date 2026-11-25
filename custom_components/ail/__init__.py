@@ -8,6 +8,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from custom_components.ail.api_client import AILEnergyClient
@@ -22,6 +23,7 @@ from custom_components.ail.const import (
     LEGACY_CONF_OFF_PEAK_PRICE,
     DAILY_PRICE_CHF,
     NIGHTLY_PRICE_CHF,
+    SSO_KEEPALIVE_INTERVAL,
 )
 from custom_components.ail.coordinator import EnergyDataUpdateCoordinator
 
@@ -68,6 +70,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Store coordinator
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = data_coordinator
+
+    entry.async_on_unload(
+        async_track_time_interval(
+            hass, data_coordinator.async_keepalive, SSO_KEEPALIVE_INTERVAL
+        )
+    )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True

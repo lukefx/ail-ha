@@ -1,3 +1,7 @@
+"""Constants for the AIL integration."""
+
+from datetime import timedelta
+
 DOMAIN = "ail"
 
 CONF_USERNAME = "username"
@@ -23,6 +27,12 @@ ENERGY_CONSUMPTION_COST_NIGHT_KEY = f"{DOMAIN}:energy_night_consumption_cost"
 # Update interval
 DEFAULT_UPDATE_INTERVAL_HOUR = 1
 CONSUMPTION_DATA_DAYS_TO_FETCH = 14
+
+# The hourly poll only renews the Energy Buddy session; the Keycloak session is
+# never touched, so it idles out long before the portal session does and every
+# recovery would need the e-mailed code. This task touches the authorize
+# endpoint instead. Keep it below the realm's SSO idle timeout.
+SSO_KEEPALIVE_INTERVAL = timedelta(minutes=30)
 
 DAILY_PRICE_CHF = 0.2580  # CHF/kWh
 NIGHTLY_PRICE_CHF = 0.2347  # CHF/kWh

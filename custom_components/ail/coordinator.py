@@ -123,6 +123,48 @@ class EnergyDataUpdateCoordinator(DataUpdateCoordinator[Optional[ConsumptionData
         self.entry = entry
         self.estimated_breakdown: EstimatedConsumptionBreakdown | None = None
         self._last_breakdown_refresh: datetime | None = None
+        # None = not measured yet, so only transitions are logged.
+        self._sso_alive: bool | None = None
+        self._sso_keepalive_failed = False
+
+    async def async_keepalive(self, _now: datetime) -> None:
+        """Keep the identity-provider session warm between data polls.
+
+        Silent recovery after a session lapse depends on Keycloak still knowing
+        this client, so the session has to be touched more often than its idle
+        timeout. Only state changes are logged to keep the log quiet.
+        """
+        try:
+            alive = await self.api_client.keepalive()
+        except (AILClientError, aiohttp.ClientError, asyncio.TimeoutError) as err:
+            if not self._sso_keepalive_failed:
+                # One warning per process: a persistent transport problem would
+                # otherwise repeat every interval forever.
+                _LOGGER.warning("AIL SSO keepalive failed: %s", err)
+                self._sso_keepalive_failed = True
+            else:
+                _LOGGER.debug("AIL SSO keepalive failed: %s", err)
+            return
+
+        self._sso_keepalive_failed = False
+
+        if alive is None:
+            _LOGGER.debug("AIL SSO keepalive skipped: no cached session yet")
+            return
+
+        if not alive:
+            if self._sso_alive is not False:
+                _LOGGER.warning(
+                    "AIL identity-provider session is no longer alive; the next "
+                    "session expiry will need the e-mailed verification code"
+                )
+            self._sso_alive = False
+            return
+
+        if self._sso_alive is not True:
+            _LOGGER.debug("AIL identity-provider session kept alive")
+        self._sso_alive = True
+        self._persist_session_state()
 
     async def _async_setup(self) -> None:
         """Set up the coordinator by fetching historical data.
